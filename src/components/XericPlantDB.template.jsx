@@ -96,6 +96,27 @@ const SRC_LABEL = {
 const HAS_ESTIMATES = PLANTS.some(p => p.ignSrc === "est");
 const HAS_UNVERIFIED_CULTURE = PLANTS.some(p => p.cultureSrc === "V");
 
+/* Wildlife tags, read out of the dataset rather than listed here.
+
+   plants.json holds eighteen of them and they are long-tailed — 78 species
+   carry Pollinators and one carries Monarchs. A hand-written list would drift
+   the first time a species is added, and a checkbox that matches one plant is
+   a filter that empties the page. So the vocabulary is derived, ordered by how
+   many species carry it, and cut at a count that can still be planted from:
+   below MIN_WORKABLE a tag cannot compose a palette on its own, which is the
+   same threshold the site panel applies to its own result.
+
+   The narrow tags are not lost — they still show on the cards and they are
+   still searchable. They are just not offered as a filter that leads nowhere. */
+const WILDLIFE_TAGS = (() => {
+  const n = {};
+  for (const p of PLANTS) for (const w of p.wildlife) n[w] = (n[w] || 0) + 1;
+  return Object.entries(n)
+    .filter(([, c]) => c >= SITE_RULES.minWorkable)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([w, c]) => ({ tag:w, count:c }));
+})();
+
 /* HIZ classification derived from ignitability score.
    A NULL rating means no rating is known, which is not the same as a bad one.
    Without the first branch, null falls past both comparisons and lands on
@@ -116,10 +137,13 @@ const ft = v => v < 1 ? `${Math.round(v * 12)}"` : `${v}′`;
    correction or a home ignition zone band changes, it changes there and this
    follows on the next render. */
 
+/* `key` labels the button; `name` is for prose. "A N slope at gentle grade" is
+   what happens when a button label is dropped into a sentence. */
 const ASPECT_POINTS = [
-  { key:"N",  deg:0   }, { key:"NE", deg:45  }, { key:"E",  deg:90  },
-  { key:"SE", deg:135 }, { key:"S",  deg:180 }, { key:"SW", deg:225 },
-  { key:"W",  deg:270 }, { key:"NW", deg:315 },
+  { key:"N",  deg:0,   name:"north"      }, { key:"NE", deg:45,  name:"north-east" },
+  { key:"E",  deg:90,  name:"east"       }, { key:"SE", deg:135, name:"south-east" },
+  { key:"S",  deg:180, name:"south"      }, { key:"SW", deg:225, name:"south-west" },
+  { key:"W",  deg:270, name:"west"       }, { key:"NW", deg:315, name:"north-west" },
 ];
 
 /* Slope bands a homeowner can judge by looking, mapped to the mid-point of each
@@ -127,11 +151,34 @@ const ASPECT_POINTS = [
    SITE_RULES.fullAspectSlopePct, so a gentle grade moves the answer far less
    than a steep one. */
 const SLOPE_BANDS = [
-  { key:"flat",     label:"Flat",     hint:"barely reads as a slope", pct:1  },
-  { key:"gentle",   label:"Gentle",   hint:"you notice it walking",   pct:10 },
-  { key:"moderate", label:"Moderate", hint:"hard to mow across",      pct:22 },
-  { key:"steep",    label:"Steep",    hint:"you scramble",            pct:38 },
+  { key:"flat",     label:"Flat",     hint:"barely reads as a slope", pct:1,  maxPct:5  },
+  { key:"gentle",   label:"Gentle",   hint:"you notice it walking",   pct:10, maxPct:16 },
+  { key:"moderate", label:"Moderate", hint:"hard to mow across",      pct:22, maxPct:30 },
+  { key:"steep",    label:"Steep",    hint:"you scramble",            pct:38, maxPct:Infinity },
 ];
+
+/* Slope is held as a PERCENT rather than a band key, so a measured 8.8% stays
+   8.8% instead of being rounded to the nearest homeowner-judgeable band and
+   losing precision the aspect correction actually uses. The bands remain the
+   manual control and light up whichever one contains the current value. */
+const bandForPct = pct =>
+  SLOPE_BANDS.find(b => pct < b.maxPct) || SLOPE_BANDS[SLOPE_BANDS.length - 1];
+
+/* Which compass button to light for a continuous bearing. Display only — the
+   offset curve is evaluated on the real bearing, never on the snapped one. */
+const nearestAspectPoint = deg =>
+  deg == null ? null
+    : ASPECT_POINTS[Math.round(((deg % 360) + 360) % 360 / 45) % 8];
+
+/* Short form for the facts table, spelled out for a sentence. */
+const compassKey = deg => {
+  const p = nearestAspectPoint(deg);
+  return p ? p.key : "—";
+};
+const compassName = deg => {
+  const p = nearestAspectPoint(deg);
+  return p ? p.name : "flat or unknown";
+};
 
 /* offset(θ) = north·cos θ + east·sin θ — the same smooth curve the reports use,
    so a bearing near a compass boundary cannot swing the answer by 1,900 ft the
@@ -170,6 +217,263 @@ function clearsFloor(p, minIgn) {
   if (minIgn == null) return true;
   if (!hasPublishedIgn(p)) return false;
   return p.ign >= minIgn;
+}
+
+/* ═══════════════════ MEASURING A SITE FROM AN ADDRESS ═══════════════════
+
+   The panel used to ask three questions. It now measures two of them.
+
+   WHAT THIS IS
+   Elevation, slope and aspect for a street address, read from the same USGS
+   3DEP ImageServer that scripts/sitecore/sources/elevation.py reads, over the
+   same analysis radius (SITE_RULES.analysisRadiusM), at the same 128-cell grid.
+   Checked against three built site profiles it returns the same numbers:
+
+     vail-north    elev 8287.9 ft (8287.9)  aspect 23.6° (23.8)  coh 0.85 (0.85)  slope 37.4% (37.4)
+     vail-test     elev 8183.9 ft (8183.9)  aspect 202.1° (203.1) coh 0.52 (0.52)  slope 10.0% (10.0)
+     grenada-glen  elev 7941.9 ft (7941.9)  aspect 276.9° (278.0) coh 0.87 (0.87)  slope 25.4% (25.4)
+
+   That agreement is the requirement, not a nicety. A visitor who runs this and
+   then commissions an analysis must not be shown two different accounts of
+   their own hillside, so this measures what the pipeline measures or it has no
+   business reporting a number at all.
+
+   WHY THE GEOCODE GOES THROUGH THIS ORIGIN
+   The Census geocoder sends no Access-Control-Allow-Origin, so a browser cannot
+   read it. /api/site-lookup forwards. Everything after the geocode is fetched
+   straight from USGS — which is given COORDINATES ONLY. The visitor's typed
+   address never reaches a third party.
+
+   WHY NOT ONE POINT SAMPLE, WHICH WOULD BE ONE CALL AND NO ARITHMETIC
+   Because it is wrong. `identify` with the Aspect Degrees rule at
+   5027 Main Gore Dr N returns 237° — south-west — for ground whose 120 m
+   average faces 302°, north-west. A 65° error on the input that moves effective
+   elevation by up to 3,000 ft, produced by a single 1 m cell sitting on a
+   driveway berm. The area histogram is the entire point.
+
+   WHY A HISTOGRAM RATHER THAN THE RASTER
+   `computeHistograms` returns the distribution over an envelope as JSON, in one
+   request, with CORS. The Python reads a float TIFF and averages the cells;
+   this reads the same cells already binned. No TIFF parser in the browser.
+
+   WHAT IT DELIBERATELY DOES NOT DO
+   No soil, no snowpack, no skyline, no surface model — and therefore no sun
+   hours. The skyline needs a directional scan over a 3 km DEM, which is a
+   raster read and not a histogram, so light is not measured here and nothing
+   is filtered on it. A site analysis does that. This does not pretend to. */
+
+const M_PER_FT = 0.3048;
+const IMAGESERVER =
+  "https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer";
+
+/* The same 128 cells across the AOI that elevation.py cuts, so the browser
+   averages the same population the pipeline averages rather than a coarser
+   sample that happens to look similar. */
+const GRID = 128;
+
+/* WGS84 -> Web Mercator metres, and a square bbox around a point.
+   Both are ports of sitecore/resolve.py. The 1/cos(latitude) correction is not
+   optional: Web Mercator distances are inflated by about 1.30 at 39.6°N, so a
+   radius used raw would cut a tile ~30% too small. */
+function to3857(lon, lat) {
+  return [
+    (lon * 20037508.34) / 180,
+    (Math.log(Math.tan(((90 + lat) * Math.PI) / 360)) / (Math.PI / 180)) *
+      (20037508.34 / 180),
+  ];
+}
+
+function bbox3857(lat, lon, radiusM) {
+  const [cx, cy] = to3857(lon, lat);
+  const r = radiusM / Math.cos((lat * Math.PI) / 180);
+  return { xmin: cx - r, ymin: cy - r, xmax: cx + r, ymax: cy + r, side: 2 * r };
+}
+
+/* How long the whole measurement may take before it is called off.
+
+   Not a guess. 3DEP is slow and its latency has a long tail: measured from the
+   browser on a single afternoon, one histogram returned in 13 s, another in 24,
+   and a third in 52. A budget shorter than that would abort requests that were
+   about to succeed, which is the worst of both — so this is set past the slow
+   tail and its job is only to stop a hang, not to enforce a pace. */
+const LOOKUP_BUDGET_MS = 75000;
+
+/* 3DEP is fronted by CloudFront and intermittently answers 504 — and CloudFront
+   CACHES that 504, so an immediate identical retry gets the stored failure back
+   rather than a fresh attempt. The retry therefore has to change the URL. `_r`
+   is ignored by the service and defeats the cache entry, which is exactly what
+   makes the second try worth making.
+
+   The retry is bounded by the caller's DEADLINE rather than by a count. Three
+   attempts against a service answering in 52 s is a two-and-a-half minute
+   spinner, and nobody waits that long — they reload, and the reload starts the
+   same two and a half minutes again. */
+async function getJSON(path, params, signal, deadline) {
+  let err = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt && Date.now() >= deadline) break;
+    const q = new URLSearchParams(params);
+    if (attempt) q.set("_r", String(Math.floor(Math.random() * 1e9)));
+    try {
+      const r = await fetch(`${IMAGESERVER}/${path}?${q}`, { signal });
+      if (!r.ok) throw new Error(`3DEP returned ${r.status}`);
+      const d = await r.json();
+      if (d && d.error) throw new Error(d.error.message || "3DEP reported an error");
+      return d;
+    } catch (e) {
+      if (e.name === "AbortError") throw e;
+      err = e;
+    }
+  }
+  throw err || new Error("3DEP did not answer");
+}
+
+/* Bin mid-points. computeHistograms reports `size` bins spanning min..max, and
+   the counts alone say nothing without them. */
+function binCentres(h) {
+  const w = (h.max - h.min) / h.size;
+  return Array.from({ length: h.size }, (_, i) => h.min + w * (i + 0.5));
+}
+
+/* Mean bearing and coherence over an aspect histogram.
+
+   An arithmetic mean is wrong on a circle — 350° and 10° average to 180°, due
+   south, when every input pointed north. On a north-facing slope that inverts
+   the aspect and moves effective elevation 3,000 ft the wrong way.
+
+   Coherence is the resultant length: 1.0 unanimous, 0 none. It is returned
+   beside the bearing and never dropped, because a mean without it is a trap.
+   Dissected mountain ground alternates spur and draw every hundred metres, and
+   averaging opposing faces yields a confident bearing that describes no ground
+   on the property. SITE_RULES.aspectCoherence carries the two thresholds that
+   decide whether this number may be believed.
+
+   ArcGIS encodes flat ground as -1. Those cells hold no bearing and are dropped
+   rather than counted as due north. */
+function circularStats(h) {
+  const centres = binCentres(h);
+  let sx = 0, sy = 0, n = 0;
+  for (let i = 0; i < centres.length; i++) {
+    const c = centres[i], k = h.counts[i];
+    if (c < 0 || !k) continue;
+    sx += k * Math.sin((c * Math.PI) / 180);
+    sy += k * Math.cos((c * Math.PI) / 180);
+    n += k;
+  }
+  if (!n) return null;
+  const deg = ((Math.atan2(sx, sy) * 180) / Math.PI + 360) % 360;
+  return { deg, coherence: Math.hypot(sx, sy) / n, n };
+}
+
+function weightedMean(h) {
+  const centres = binCentres(h);
+  let num = 0, den = 0;
+  for (let i = 0; i < centres.length; i++) {
+    const k = h.counts[i];
+    if (!k) continue;
+    num += k * centres[i];
+    den += k;
+  }
+  return den ? num / den : null;
+}
+
+/* Elevation, slope and aspect for a point. Three requests, run together —
+   they do not depend on one another and 3DEP is slow enough that doing them in
+   sequence is felt. */
+async function measureTerrain(lat, lon) {
+  /* One controller for all three requests. They are a single measurement — two
+     of three numbers is not a site — so they succeed or are called off together,
+     and an abandoned tab does not leave three sockets open against USGS. */
+  const ctl = new AbortController();
+  const deadline = Date.now() + LOOKUP_BUDGET_MS;
+  const timer = setTimeout(() => ctl.abort(), LOOKUP_BUDGET_MS);
+  try {
+    return await measureWith(lat, lon, ctl.signal, deadline);
+  } catch (e) {
+    if (e.name === "AbortError") {
+      throw new Error(
+        "USGS did not answer within " + Math.round(LOOKUP_BUDGET_MS / 1000) +
+        " seconds. The 3DEP service is intermittently slow and this is not " +
+        "something this page can fix — try again in a minute, or set your site " +
+        "by hand below.");
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function measureWith(lat, lon, signal, deadline) {
+  const radiusM = SITE_RULES.analysisRadiusM;
+  const b = bbox3857(lat, lon, radiusM);
+  const geometry = JSON.stringify({
+    xmin: b.xmin, ymin: b.ymin, xmax: b.xmax, ymax: b.ymax,
+    spatialReference: { wkid: 3857 },
+  });
+  const pixelSize = JSON.stringify({ x: b.side / GRID, y: b.side / GRID });
+  const surface = rule => getJSON("computeHistograms", {
+    geometry,
+    geometryType: "esriGeometryEnvelope",
+    renderingRule: JSON.stringify({ rasterFunction: rule }),
+    pixelSize,
+    f: "json",
+  }, signal, deadline);
+
+  const [point, aspectH, slopeH] = await Promise.all([
+    getJSON("identify", {
+      geometry: JSON.stringify({ x: lon, y: lat, spatialReference: { wkid: 4326 } }),
+      geometryType: "esriGeometryPoint",
+      returnGeometry: "false",
+      f: "json",
+    }, signal, deadline),
+    surface("Aspect Degrees"),
+    surface("Slope Degrees"),
+  ]);
+
+  const metres = Number(point && point.value);
+  /* 3DEP returns its NoData sentinel as a large negative number outside the
+     tiled area. Treating that as an elevation would put the site below sea
+     level and pass every filter. */
+  const elevFt =
+    Number.isFinite(metres) && metres > -1000 ? metres / M_PER_FT : null;
+
+  const slopeDeg = slopeH.histograms && slopeH.histograms[0]
+    ? weightedMean(slopeH.histograms[0]) : null;
+  const slopePct =
+    slopeDeg == null ? null : Math.tan((slopeDeg * Math.PI) / 180) * 100;
+
+  /* GROUND THIS FLAT HAS NO ASPECT, and elevation.py refuses to report one:
+     "aspect is undefined and must not be invented". The cells still average to
+     a bearing — arithmetic does not know the ground is level — so without this
+     the panel would print a confident direction for a flat lot and offer to
+     correct its elevation for a slope that is not there.
+
+     Note the units. This threshold is in DEGREES of slope, because that is what
+     3DEP returns; SITE_RULES.minAspectSlopePct is a percent and answers a
+     different question — whether a known aspect is steep enough to earn a
+     correction. They are not the same number and must not be collapsed. */
+  const aspectExists =
+    slopeDeg != null && slopeDeg >= SITE_RULES.minAspectSlopeDeg;
+  const asp = aspectExists && aspectH.histograms && aspectH.histograms[0]
+    ? circularStats(aspectH.histograms[0]) : null;
+
+  return {
+    elevFt: elevFt == null ? null : Math.round(elevFt),
+    slopePct: slopePct == null ? null : Math.round(slopePct * 10) / 10,
+    slopeDeg: slopeDeg == null ? null : Math.round(slopeDeg * 10) / 10,
+    aspectDeg: asp ? Math.round(asp.deg * 10) / 10 : null,
+    aspectCoherence: asp ? Math.round(asp.coherence * 100) / 100 : null,
+    radiusM,
+  };
+}
+
+/* The range guard's geographic half, on the same box as
+   packs/xeric.assert_in_range(). Refusing is the feature: outside the Southern
+   Rockies this database matches a handful of species on elevation alone and
+   returns something that looks like a palette and is the residue of a filter. */
+function outsideCoverage(lat, lon) {
+  const b = SITE_RULES.coBbox;
+  return lat < b.south || lat > b.north || lon < b.west || lon > b.east;
 }
 
 /* ═══════════════════════ SMALL PARTS ═══════════════════════ */
@@ -218,6 +522,7 @@ export default function XericPlantDB() {
   const [deerOnly, setDeer]       = useState(false);
   const [psOnly, setPs]           = useState(false);
   const [useF, setUseF]           = useState([]);
+  const [wildlifeF, setWildlifeF] = useState([]);
   const [edibleOnly, setEdible]   = useState(false);
   // Starts collapsed: this only has an effect below 861px, where an expanded filter
   // panel would push the results off the first screen. Desktop ignores it.
@@ -228,9 +533,19 @@ export default function XericPlantDB() {
      doing rather than just moving sliders on the user's behalf. */
   const [siteOn, setSiteOn]       = useState(false);
   const [siteElev, setSiteElev]   = useState(8000);
-  const [siteAspect, setSiteAspect] = useState(null);   // null = flat/unknown
-  const [siteSlope, setSiteSlope] = useState("gentle");
+  const [siteAspect, setSiteAspect] = useState(null);   // degrees, or null = flat/unknown
+  const [siteSlopePct, setSiteSlopePct] = useState(10); // percent, not a band key
   const [siteDist, setSiteDist]   = useState(15);
+
+  /* The address lookup. Held apart from the three tuning values it fills in,
+     because they are not the same thing: the measurement is a claim about the
+     ground with a provenance and a confidence, while siteElev/siteAspect/
+     siteSlopePct are simply what the list is currently tuned to. Keeping them
+     separate is what lets the panel say "we measured 302° but you have
+     overridden it to north" instead of quietly forgetting one of the two. */
+  const [siteAddr, setSiteAddr]   = useState("");
+  const [lookup, setLookup]       = useState({ status:"idle" });
+  const [manualOpen, setManualOpen] = useState(false);
   const [view, setView]           = useState("cards");
   const [sortBy, setSortBy]       = useState("common");
   const [sortDir, setSortDir]     = useState("asc");
@@ -241,15 +556,14 @@ export default function XericPlantDB() {
   const clearAll = () => {
     setSearch(""); setTypeF([]); setWaterF([]); setHizF([]);
     setZoneF(0); setElevF(0); setNative(false); setDeer(false); setPs(false);
-    setUseF([]); setEdible(false);
+    setUseF([]); setWildlifeF([]); setEdible(false);
   };
 
   const nActive = typeF.length + waterF.length + hizF.length +
     (zoneF ? 1 : 0) + (elevF ? 1 : 0) + (nativeOnly ? 1 : 0) + (deerOnly ? 1 : 0) + (psOnly ? 1 : 0) +
-    useF.length + (edibleOnly ? 1 : 0) + (search ? 1 : 0);
+    useF.length + wildlifeF.length + (edibleOnly ? 1 : 0) + (search ? 1 : 0);
 
-  const slopePct = (SLOPE_BANDS.find(b => b.key === siteSlope) || SLOPE_BANDS[1]).pct;
-  const effElev = effectiveElevation(siteElev, siteAspect, slopePct);
+  const effElev = effectiveElevation(siteElev, siteAspect, siteSlopePct);
   const siteZone = zoneForDistance(siteDist);
 
   const plants = useMemo(() => {
@@ -276,6 +590,7 @@ export default function XericPlantDB() {
       if (psOnly && !p.ps) return false;
       if (edibleOnly && !p.edible) return false;
       if (useF.length && !useF.some(u => p.useTags.includes(u))) return false;
+      if (wildlifeF.length && !wildlifeF.some(w => p.wildlife.includes(w))) return false;
       return true;
     }).sort((a, b) => {
       const k = { common:"common", sci:"sci", type:"type", zone:"zoneMin", ign:"ign", height:"htMax", elev:"elevMax" }[sortBy] || "common";
@@ -290,8 +605,8 @@ export default function XericPlantDB() {
       }
       return sortDir === "asc" ? av - bv : bv - av;
     });
-  }, [search, typeF, waterF, hizF, zoneF, elevF, nativeOnly, deerOnly, psOnly, useF, edibleOnly, sortBy, sortDir,
-      siteOn, siteElev, siteAspect, siteSlope, siteDist]);
+  }, [search, typeF, waterF, hizF, zoneF, elevF, nativeOnly, deerOnly, psOnly, useF, wildlifeF,
+      edibleOnly, sortBy, sortDir, siteOn, siteElev, siteAspect, siteSlopePct, siteDist]);
 
   /* Species the band would take but for an unpublished rating. Shown as a count,
      never as a list of names to plant — the whole point is that they are not
@@ -301,7 +616,7 @@ export default function XericPlantDB() {
     return PLANTS.filter(p =>
       !hasPublishedIgn(p) && p.ign >= siteZone.minIgn &&
       p.elevMin <= effElev.ft && p.elevMax >= effElev.ft).length;
-  }, [siteOn, siteElev, siteAspect, siteSlope, siteDist]);
+  }, [siteOn, siteElev, siteAspect, siteSlopePct, siteDist]);
 
   const doSort = c => { if (sortBy === c) setSortDir(d => d === "asc" ? "desc" : "asc"); else { setSortBy(c); setSortDir("asc"); } };
 
@@ -334,15 +649,107 @@ export default function XericPlantDB() {
   // that class means anything: below 861px it hides, at wider widths it is ignored, so
   // desktop always shows the filters no matter what the toggle last did on mobile.
   /* ═══════════════════ SITE PANEL ═══════════════════
-     Three questions a homeowner can answer by standing outside, turned into the
-     same effective elevation and fire band the full analysis computes. It is a
-     first pass, and it says so — the real work measures slope, aspect, skyline
-     and soil rather than asking. */
+     An address, measured. 3DEP gives elevation, slope and aspect over the same
+     120 m radius a site profile uses, and those three become the same effective
+     elevation and fire band the full analysis computes.
+
+     THE MEASUREMENT DOES NOT ALWAYS GET TO WIN.
+     Aspect is the input that moves effective elevation by up to 3,000 ft, and
+     on dissected mountain ground a single mean bearing frequently describes no
+     part of the property — the coherence number says when. Below
+     SITE_RULES.aspectCoherence.incoherent the panel reports the reading and
+     refuses to tune on it, because a confident wrong aspect is worse than the
+     slider it replaced. Every value stays editable underneath for the same
+     reason: the geocode is a point on a road, not the house.
+
+     It is still a first pass, and it still says so. What changed is which part
+     is guessed — the ground is now measured, and the distance from the house,
+     which no public dataset knows, is the one thing left to answer. */
+  const measured = lookup.status === "ok" ? lookup.data : null;
+  const coh = measured && measured.aspectCoherence;
+  const aspectTrusted =
+    coh != null && coh >= SITE_RULES.aspectCoherence.incoherent;
+
+  /* Has the visitor moved a control away from what was measured? Compared on
+     the rounded values the panel actually displays, so "8,546 ft" does not
+     report itself as overridden because of a hidden decimal. */
+  const overridden = !!measured && (
+    siteElev !== measured.elevFt ||
+    Math.round(siteSlopePct * 10) / 10 !== measured.slopePct ||
+    (aspectTrusted && siteAspect !== measured.aspectDeg) ||
+    (!aspectTrusted && siteAspect !== null)
+  );
+
+  const applyMeasurement = m => {
+    if (m.elevFt != null) setSiteElev(m.elevFt);
+    if (m.slopePct != null) setSiteSlopePct(m.slopePct);
+    /* An incoherent bearing is not applied. It is still reported — the visitor
+       is told what was read and why it was not used, and can set the aspect by
+       hand from standing outside, which on this ground is the better instrument. */
+    setSiteAspect(
+      m.aspectDeg != null &&
+      m.aspectCoherence != null &&
+      m.aspectCoherence >= SITE_RULES.aspectCoherence.incoherent
+        ? m.aspectDeg
+        : null,
+    );
+  };
+
+  const runLookup = async e => {
+    if (e) e.preventDefault();
+    const address = siteAddr.trim();
+    if (!address) return;
+    setSiteOn(true);
+    setLookup({ status: "loading" });
+    try {
+      const r = await fetch(`/api/site-lookup?address=${encodeURIComponent(address)}`);
+      const geo = await r.json();
+      if (!r.ok) {
+        setLookup({ status: "error", message: geo.message || "That address could not be found." });
+        return;
+      }
+      /* Refuse before measuring, not after. The range guard is about what this
+         database can answer for, and running three USGS requests to decorate a
+         refusal helps nobody. */
+      if (outsideCoverage(geo.lat, geo.lon)) {
+        setLookup({
+          status: "error",
+          message:
+            `${geo.matchedAddress || address} is outside Colorado. This database is ` +
+            "built for the Southern Rockies, and off that map it would return the " +
+            "residue of a filter rather than a palette.",
+        });
+        return;
+      }
+      setLookup({ status: "loading", phase: "terrain" });
+      const terrain = await measureTerrain(geo.lat, geo.lon);
+      if (terrain.elevFt == null) {
+        setLookup({
+          status: "error",
+          message: "USGS has no elevation for that point, so there is nothing to tune to.",
+        });
+        return;
+      }
+      const data = { ...geo, ...terrain };
+      applyMeasurement(data);
+      setLookup({ status: "ok", data });
+    } catch (err) {
+      setLookup({
+        status: "error",
+        message:
+          err && err.message
+            ? `The terrain lookup failed: ${err.message}. USGS 3DEP is intermittent — try again, or set your site by hand below.`
+            : "The lookup failed. Set your site by hand below.",
+      });
+    }
+  };
+
   const SitePanel = () => {
-    const band = SLOPE_BANDS.find(b => b.key === siteSlope) || SLOPE_BANDS[1];
-    const aspectLabel = siteAspect == null
-      ? "flat or unknown"
-      : ASPECT_POINTS.find(a => a.deg === siteAspect).key;
+    const band = bandForPct(siteSlopePct);
+    const aspectLabel = compassName(siteAspect);
+    const nearest = nearestAspectPoint(siteAspect);
+    const showManual = manualOpen || lookup.status === "error" || lookup.status === "idle";
+
     return (
       <div className="xpdb-site">
         <button type="button" className="xpdb-site-toggle"
@@ -353,43 +760,196 @@ export default function XericPlantDB() {
 
         {siteOn && (
           <div className="xpdb-site-body">
-            <label className="xpdb-site-lab" htmlFor="xpdb-elev">
-              Elevation <b>{siteElev.toLocaleString()} ft</b>
-            </label>
-            <input id="xpdb-elev" type="range" min="5000" max="11000" step="100"
-              value={siteElev} onChange={e => setSiteElev(+e.target.value)} />
+            {/* A form, so Enter submits and the field is a real search control.
+                onSubmit rather than onClick for the same reason. */}
+            <form className="xpdb-site-addr" onSubmit={runLookup}>
+              <label className="xpdb-site-lab" htmlFor="xpdb-addr">
+                Your address
+              </label>
+              <div className="xpdb-site-addr-row">
+                <input id="xpdb-addr" type="text" autoComplete="street-address"
+                  placeholder="123 Main St, Vail, CO"
+                  value={siteAddr} onChange={e => setSiteAddr(e.target.value)} />
+                <button type="submit" disabled={lookup.status === "loading" || !siteAddr.trim()}>
+                  {lookup.status === "loading" ? "Measuring…" : "Measure"}
+                </button>
+              </div>
+              <p className="xpdb-site-privacy">
+                Sent to the US Census geocoder to find the coordinates, and
+                nowhere else. Not stored, not logged. The elevation and slope
+                come from USGS, which is given the coordinates only.
+              </p>
+            </form>
 
-            <div className="xpdb-site-lab">Which way does the ground fall away?</div>
-            <div className="xpdb-site-row">
-              <button type="button" onClick={() => setSiteAspect(null)}
-                className={siteAspect == null ? "on" : ""}>Flat</button>
-              {ASPECT_POINTS.map(a => (
-                <button key={a.key} type="button" onClick={() => setSiteAspect(a.deg)}
-                  className={siteAspect === a.deg ? "on" : ""}>{a.key}</button>
-              ))}
-            </div>
+            {/* 3DEP answers in 10-13 seconds on a good day and retries past a
+                cached CloudFront 504 on a bad one, so a lookup can run 40. A
+                button that says "Measuring…" for forty seconds and nothing else
+                reads as broken, and the visitor reloads halfway through. Naming
+                the current step costs nothing and makes the wait legible. */}
+            {lookup.status === "loading" && (
+              <p className="xpdb-site-prov" role="status">
+                {lookup.phase === "terrain"
+                  ? "Reading the terrain from USGS 3DEP — elevation, slope and aspect over 120 m. This takes a few seconds, and longer when the service is busy."
+                  : "Finding the address…"}
+              </p>
+            )}
 
-            <div className="xpdb-site-lab">How steep?</div>
-            <div className="xpdb-site-row">
-              {SLOPE_BANDS.map(b => (
-                <button key={b.key} type="button" title={b.hint}
-                  onClick={() => setSiteSlope(b.key)}
-                  className={siteSlope === b.key ? "on" : ""}>{b.label}</button>
-              ))}
-            </div>
+            {lookup.status === "error" && (
+              <p className="xpdb-site-err">{lookup.message}</p>
+            )}
 
-            <div className="xpdb-site-lab">How far from the house?</div>
-            <div className="xpdb-site-row">
-              {[3, 15, 60, 150].map(d => {
-                const z = zoneForDistance(d);
-                return (
-                  <button key={d} type="button" onClick={() => setSiteDist(d)}
-                    className={siteDist === d ? "on" : ""}>
-                    {z.fromFt}–{z.toFt} ft
-                  </button>
-                );
-              })}
-            </div>
+            {measured && (
+              <div className="xpdb-site-meas">
+                <p className="xpdb-site-matched">
+                  <b>{measured.matchedAddress}</b>
+                </p>
+                <dl className="xpdb-site-facts">
+                  <div><dt>Elevation</dt><dd>{measured.elevFt.toLocaleString()} ft</dd></div>
+                  <div><dt>Slope</dt><dd>{measured.slopePct}% · {bandForPct(measured.slopePct).label.toLowerCase()}</dd></div>
+                  <div>
+                    <dt>Aspect</dt>
+                    <dd>
+                      {measured.aspectDeg == null
+                        ? "none — ground is flat"
+                        : `${Math.round(measured.aspectDeg)}° ${compassKey(measured.aspectDeg)}`}
+                    </dd>
+                  </div>
+                  {measured.hardiness && (
+                    <div>
+                      <dt>Hardiness zone</dt>
+                      <dd>{measured.hardiness.zone}{measured.hardiness.tempRange ? ` · ${measured.hardiness.tempRange}°F` : ""}</dd>
+                    </div>
+                  )}
+                </dl>
+                <p className="xpdb-site-prov">
+                  Elevation, slope and aspect measured from USGS 3DEP over a{" "}
+                  {Math.round(measured.radiusM)} m radius — the same reading a
+                  site analysis starts from.
+                  {measured.hardiness && (
+                    <> The hardiness zone is the USDA 2023 figure for ZIP{" "}
+                    {measured.hardiness.zip}, not for this parcel: in this county one
+                    ZIP spans thousands of feet, so it is shown as background and is
+                    not filtered on. Elevation is what actually selects.</>
+                  )}
+                </p>
+
+                {/* THE COHERENCE REPORT. Not a footnote — on this ground it is
+                    frequently the most important line in the panel. */}
+                {measured.aspectDeg == null && (
+                  <p className="xpdb-site-prov">
+                    At {measured.slopeDeg}° mean slope this ground is level enough
+                    that it has no aspect to report — so none was invented, and no
+                    correction was applied. If the patch you are planting does fall
+                    one way, set it by hand.
+                  </p>
+                )}
+
+                {measured.aspectDeg != null && coh != null && (
+                  <p className={aspectTrusted ? "xpdb-site-prov" : "xpdb-site-held"}>
+                    {coh >= SITE_RULES.aspectCoherence.coherent ? (
+                      <>The slope faces one way consistently (coherence {coh.toFixed(2)}),
+                      so that bearing describes your ground.</>
+                    ) : aspectTrusted ? (
+                      <><b>Mixed aspect</b> (coherence {coh.toFixed(2)}). This is dissected
+                      ground and the bearing blends differing faces — it is applied, but
+                      treat it as indicative and correct it below if you can see which way
+                      your planting area actually falls.</>
+                    ) : (
+                      <><b>No dominant direction</b> (coherence {coh.toFixed(2)}). Within
+                      {" "}{Math.round(measured.radiusM)} m the ground faces too many ways for one
+                      bearing to mean anything, so <b>no aspect correction has been
+                      applied</b>. Set it below from what you can see — standing outside
+                      beats the average here.</>
+                    )}
+                  </p>
+                )}
+
+                {measured.precision && measured.precision.span >= 100 && (
+                  <p className="xpdb-site-held">
+                    That address was interpolated along a street carrying numbers{" "}
+                    {measured.precision.fromAddress}–{measured.precision.toAddress}, so the
+                    point may sit hundreds of feet from the house — and on a winding
+                    mountain road that can be a different hillside. Check the elevation
+                    against what you know, and adjust below.
+                  </p>
+                )}
+
+                {measured.ambiguous > 0 && (
+                  <p className="xpdb-site-held">
+                    {measured.ambiguous} addresses matched; the first was taken.
+                  </p>
+                )}
+
+                {overridden && (
+                  <p className="xpdb-site-prov">
+                    The list is tuned to your edits, not to the measurement.{" "}
+                    <button type="button" className="xpdb-linkish"
+                      onClick={() => applyMeasurement(measured)}>Reset to measured</button>
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* ── the manual controls ──
+                Kept, and pre-filled. The measurement is a point on a road read
+                against a bare-earth model: it does not know the house, the
+                aspen grove, or which corner of the lot is being planted, and
+                when coherence is low it does not know the aspect either. */}
+            {!showManual && (
+              <button type="button" className="xpdb-linkish xpdb-site-adjust"
+                onClick={() => setManualOpen(true)}>Adjust these by hand →</button>
+            )}
+
+            {showManual && (
+              <div className="xpdb-site-manual">
+                <div className="xpdb-site-lab">
+                  Elevation <b>{siteElev.toLocaleString()} ft</b>
+                </div>
+                <input id="xpdb-elev" type="range" min="5000" max="11000" step="100"
+                  aria-label="Site elevation in feet"
+                  value={siteElev} onChange={e => setSiteElev(+e.target.value)} />
+
+                <div className="xpdb-site-lab">Which way does the ground fall away?</div>
+                <div className="xpdb-site-row">
+                  <button type="button" onClick={() => setSiteAspect(null)}
+                    className={siteAspect == null ? "on" : ""}>Flat</button>
+                  {ASPECT_POINTS.map(a => (
+                    <button key={a.key} type="button" onClick={() => setSiteAspect(a.deg)}
+                      className={nearest && nearest.key === a.key ? "on" : ""}>{a.key}</button>
+                  ))}
+                </div>
+                {/* A measured bearing is rarely one of the eight. Say the real
+                    number, so a highlighted "NW" is not read as exactly 315°. */}
+                {siteAspect != null && siteAspect % 45 !== 0 && (
+                  <div className="xpdb-site-lab">Currently <b>{Math.round(siteAspect)}°</b>, measured</div>
+                )}
+
+                <div className="xpdb-site-lab">How steep? <b>{Math.round(siteSlopePct)}%</b></div>
+                <div className="xpdb-site-row">
+                  {SLOPE_BANDS.map(b => (
+                    <button key={b.key} type="button" title={b.hint}
+                      onClick={() => setSiteSlopePct(b.pct)}
+                      className={band.key === b.key ? "on" : ""}>{b.label}</button>
+                  ))}
+                </div>
+
+                <div className="xpdb-site-lab">
+                  How far from the house?{" "}
+                  <span className="xpdb-site-onlyask">the one thing no dataset knows</span>
+                </div>
+                <div className="xpdb-site-row">
+                  {[3, 15, 60, 150].map(d => {
+                    const z = zoneForDistance(d);
+                    return (
+                      <button key={d} type="button" onClick={() => setSiteDist(d)}
+                        className={siteDist === d ? "on" : ""}>
+                        {z.fromFt}–{z.toFt} ft
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             <div className="xpdb-site-out">
               {siteZone.minIgn == null && siteZone.fromFt === 0 ? (
@@ -398,18 +958,53 @@ export default function XericPlantDB() {
                 </p>
               ) : (
                 <>
-                  <p>
-                    A {aspectLabel} slope at {band.label.toLowerCase()} grade
-                    behaves like <b>{effElev.ft.toLocaleString()} ft</b>
-                    {effElev.offset !== 0 && (
-                      <> — {effElev.offset > 0 ? "+" : ""}{effElev.offset.toLocaleString()} ft
-                      on its measured elevation</>
-                    )}.
-                  </p>
+                  {/* Two sentences, because one of them was contradictory. With
+                      no aspect the old wording read "a flat or unknown slope at
+                      gentle grade", which says the ground is flat and then gives
+                      its grade. An unapplied aspect is a different statement from
+                      a flat site and has to read like one. */}
+                  {siteAspect == null ? (
+                    <p>
+                      {/* "as measured" is only true once something has been
+                          measured. Before a lookup this is the default the
+                          slider starts on, and calling that a measurement is
+                          the kind of small lie the rest of this page exists to
+                          avoid. */}
+                      With no aspect applied, the list is tuned to{" "}
+                      <b>{effElev.ft.toLocaleString()} ft</b>
+                      {measured ? " as measured." : "."}
+                    </p>
+                  ) : (
+                    <p>
+                      A {aspectLabel}-facing slope at {band.label.toLowerCase()} grade
+                      behaves like <b>{effElev.ft.toLocaleString()} ft</b>
+                      {effElev.offset !== 0 && (
+                        <> — {effElev.offset > 0 ? "+" : ""}{effElev.offset.toLocaleString()} ft
+                        on its measured elevation</>
+                      )}.
+                    </p>
+                  )}
                   <p className="xpdb-site-count">
                     <b>{plants.length}</b> species suit that
                     {siteZone.minIgn != null && <> within {siteZone.toFt} ft of the house</>}.
                   </p>
+                  {/* The same guard packs/xeric.assert_usable() applies: a count
+                      below MIN_WORKABLE is not a palette, it is what survived the
+                      filter, and saying so is more useful than showing eight cards. */}
+                  {plants.length < SITE_RULES.minWorkable ? (
+                    <p className="xpdb-site-held">
+                      That is not enough to plant from. A xeriscape needs enough species
+                      to carry structure, season-long bloom and a substitute for whatever
+                      the nursery is short of — under {SITE_RULES.minWorkable} there is
+                      nothing to compose with. Widen the distance from the house, or
+                      clear the other filters.
+                    </p>
+                  ) : plants.length < SITE_RULES.thinWorkable && (
+                    <p className="xpdb-site-held">
+                      Thin for a design that needs seasonal succession and a substitute
+                      for anything the nursery is short of.
+                    </p>
+                  )}
                   {heldCount > 0 && (
                     <p className="xpdb-site-held">
                       {heldCount} more would qualify on an estimated fire rating.
@@ -420,9 +1015,13 @@ export default function XericPlantDB() {
                 </>
               )}
               <p className="xpdb-site-caveat">
-                A first pass from three answers. A real analysis measures the
-                slope, aspect, skyline and soil rather than asking — and finds
-                things this cannot, like which way the ground actually faces.
+                {measured
+                  ? <>Ground measured, house not. A site analysis adds the skyline and
+                    the shade it casts, the soil, the snowpack and the building itself —
+                    3DEP is bare earth, so nothing standing on your lot is in any of
+                    this.</>
+                  : <>A first pass. A real analysis measures the slope, aspect, skyline
+                    and soil rather than asking — and finds things this cannot.</>}
                 <a href="/contact/">Ask for a site analysis →</a>
               </p>
             </div>
@@ -542,6 +1141,23 @@ export default function XericPlantDB() {
           <input type="checkbox" checked={edibleOnly} onChange={e => setEdible(e.target.checked)} style={{accentColor:C.primary, width:13, height:13}} />
           <span style={{fontSize:11.5, fontWeight:500}}>Has documented food use</span>
         </label>
+      </div>
+
+      {/* Wildlife value */}
+      <div style={{marginBottom:18}}>
+        <div style={secLabel}>Wildlife Value</div>
+        <div style={{fontSize:10, color:C.muted, marginBottom:7, lineHeight:1.45}}>
+          What the species feeds, shelters or hosts. Any selected tag matches.
+        </div>
+        {WILDLIFE_TAGS.map(({ tag, count }) => (
+          <label key={tag} style={cbRow}>
+            <input type="checkbox" checked={wildlifeF.includes(tag)}
+              onChange={() => toggle(wildlifeF, setWildlifeF, tag)}
+              style={{accentColor:C.primary, width:13, height:13}} />
+            <span style={{fontSize:11.5}}>{tag}</span>
+            <span style={{fontSize:10, color:C.muted, marginLeft:"auto", fontVariantNumeric:"tabular-nums"}}>{count}</span>
+          </label>
+        ))}
       </div>
 
       {/* Toggles */}
@@ -781,6 +1397,75 @@ export default function XericPlantDB() {
           background: ${C.primary}; color: #fff; border-color: ${C.primary};
         }
         .xpdb-site input[type=range] { width: 100%; accent-color: ${C.primary}; }
+
+        /* ── the address form ── */
+        /* The panel spans the full width above the sidebar, which is right for
+           the measurement readout and absurd for a single-line text field —
+           an address is about 40 characters and an input eleven hundred pixels
+           wide invites nobody to type one. Capped at a readable measure; the
+           readout below is free to use the whole width. */
+        .xpdb-site-addr { display: flex; flex-direction: column; gap: .35rem; max-width: 34rem; }
+        .xpdb-site-addr-row { display: flex; gap: .4rem; }
+        .xpdb-site-addr-row input {
+          flex: 1 1 auto; min-width: 0; padding: .45rem .55rem;
+          border: 1px solid ${C.border}; border-radius: 3px; background: #fff;
+          color: ${C.text}; font: 400 .85rem/1.3 inherit;
+        }
+        .xpdb-site-addr-row input:focus-visible {
+          outline: 2px solid ${C.primary}; outline-offset: 1px;
+        }
+        .xpdb-site-addr-row button {
+          flex: 0 0 auto; padding: .45rem .8rem; cursor: pointer;
+          background: ${C.primary}; color: #fff; border: 1px solid ${C.primary};
+          border-radius: 3px; font: 600 .82rem/1.3 inherit;
+        }
+        .xpdb-site-addr-row button[disabled] { opacity: .5; cursor: default; }
+        .xpdb-site-privacy { margin: 0; color: ${C.muted}; font-size: .72rem; line-height: 1.45; }
+        .xpdb-site-err {
+          margin: 0; padding: .5rem .6rem; font-size: .8rem; line-height: 1.5;
+          color: ${C.accent}; background: #fbeee6; border: 1px solid ${C.accent};
+          border-radius: 3px;
+        }
+
+        /* ── the measurement ── */
+        .xpdb-site-meas {
+          display: flex; flex-direction: column; gap: .45rem;
+          padding: .6rem; background: ${C.bg}; border: 1px solid ${C.border};
+        }
+        .xpdb-site-matched { margin: 0; font-size: .82rem; color: ${C.text}; }
+        /* auto-fit rather than a fixed two columns: at full width the four facts
+           read as one row, and they reflow to two and then one as the panel
+           narrows, without a breakpoint for each step. */
+        .xpdb-site-facts {
+          margin: 0; display: grid; gap: .4rem 1.4rem;
+          grid-template-columns: repeat(auto-fit, minmax(9rem, max-content));
+        }
+        .xpdb-site-facts > div { display: flex; flex-direction: column; }
+        .xpdb-site-facts dt {
+          font-size: .66rem; letter-spacing: .07em; text-transform: uppercase;
+          color: ${C.muted}; font-weight: 700;
+        }
+        .xpdb-site-facts dd {
+          margin: 0; font-size: .92rem; color: ${C.text}; font-weight: 600;
+          font-variant-numeric: tabular-nums;
+        }
+        /* Prose wants a measure. These notes are the most important text in the
+           panel and at 1,200px they were single lines running the full width. */
+        .xpdb-site-prov { margin: 0; color: ${C.muted}; font-size: .74rem; line-height: 1.5; max-width: 62ch; }
+        .xpdb-site-held, .xpdb-site-caveat, .xpdb-site-err { max-width: 62ch; }
+        .xpdb-site-onlyask { color: ${C.muted}; font-size: .72rem; font-style: italic; }
+        .xpdb-site-manual {
+          display: flex; flex-direction: column; gap: .35rem;
+          padding-top: .55rem; border-top: 1px dashed ${C.border};
+        }
+        /* A button that reads as a link: it changes what is on screen rather
+           than navigating, so it must not be an anchor. */
+        .xpdb-linkish {
+          background: none; border: 0; padding: 0; cursor: pointer;
+          color: ${C.primary}; font-family: inherit; font-size: .74rem; font-weight: 600;
+          text-decoration: underline; text-underline-offset: 2px;
+        }
+        .xpdb-site-adjust { align-self: flex-start; }
         .xpdb-site-out {
           margin-top: .6rem; padding-top: .7rem; border-top: 1px solid ${C.border};
           font-size: .85rem; color: ${C.text}; display: flex; flex-direction: column; gap: .4rem;
@@ -830,6 +1515,10 @@ export default function XericPlantDB() {
             border-bottom: 1px solid ${C.border};
           }
           .xpdb-main { padding: 14px 15px !important; }
+          /* The sidebar is full-width here, so the fact grid has room to stay
+             two-up; below 420px it does not. */
+          .xpdb-site-addr-row { flex-wrap: wrap; }
+          .xpdb-site-addr-row input { flex-basis: 100%; }
         }
 
         /* Species names link to their full page. Inherit the surrounding type so the

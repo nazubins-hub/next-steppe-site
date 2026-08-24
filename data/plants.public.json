@@ -262,6 +262,7 @@
       "Seed"
     ],
     "edible": null,
+    "caution": null,
     "useTags": [],
     "culture": null,
     "cultureSrc": null,
@@ -1050,6 +1051,7 @@
       "Pollinators"
     ],
     "edible": null,
+    "caution": null,
     "useTags": [],
     "culture": null,
     "cultureSrc": null,
@@ -1401,6 +1403,7 @@
       "Pollinators"
     ],
     "edible": null,
+    "caution": null,
     "useTags": [],
     "culture": null,
     "cultureSrc": null,
@@ -1480,6 +1483,7 @@
       "Birds"
     ],
     "edible": null,
+    "caution": null,
     "useTags": [],
     "culture": null,
     "cultureSrc": null,
@@ -1517,6 +1521,7 @@
       "Pollinators"
     ],
     "edible": null,
+    "caution": null,
     "useTags": [],
     "culture": null,
     "cultureSrc": null,
@@ -1555,6 +1560,7 @@
       "Nitrogen fixer"
     ],
     "edible": null,
+    "caution": null,
     "useTags": [],
     "culture": null,
     "cultureSrc": null,
@@ -1679,6 +1685,7 @@
       "Birds"
     ],
     "edible": null,
+    "caution": null,
     "useTags": [],
     "culture": null,
     "cultureSrc": null,
@@ -2077,6 +2084,7 @@
       "Pollinators"
     ],
     "edible": null,
+    "caution": null,
     "useTags": [],
     "culture": null,
     "cultureSrc": null,
@@ -2115,6 +2123,7 @@
       "Pollinators"
     ],
     "edible": null,
+    "caution": null,
     "useTags": [],
     "culture": null,
     "cultureSrc": null,
@@ -2153,6 +2162,7 @@
       "Hummingbirds"
     ],
     "edible": null,
+    "caution": null,
     "useTags": [],
     "culture": null,
     "cultureSrc": null,
@@ -2191,6 +2201,7 @@
       "Pollinators"
     ],
     "edible": null,
+    "caution": null,
     "useTags": [],
     "culture": null,
     "cultureSrc": null,
@@ -2229,6 +2240,7 @@
       "Hummingbirds"
     ],
     "edible": null,
+    "caution": null,
     "useTags": [],
     "culture": null,
     "cultureSrc": null,
@@ -2267,6 +2279,7 @@
       "Hummingbirds"
     ],
     "edible": null,
+    "caution": null,
     "useTags": [],
     "culture": null,
     "cultureSrc": null,
@@ -2395,6 +2408,7 @@
       "Birds"
     ],
     "edible": null,
+    "caution": null,
     "useTags": [],
     "culture": null,
     "cultureSrc": null,
@@ -2691,6 +2705,7 @@
       "Butterflies"
     ],
     "edible": null,
+    "caution": null,
     "useTags": [],
     "culture": null,
     "cultureSrc": null,
@@ -2730,6 +2745,7 @@
       "Birds"
     ],
     "edible": null,
+    "caution": null,
     "useTags": [],
     "culture": null,
     "cultureSrc": null,
@@ -2769,6 +2785,7 @@
       "Birds"
     ],
     "edible": null,
+    "caution": null,
     "useTags": [],
     "culture": null,
     "cultureSrc": null,
@@ -2981,6 +2998,7 @@
       "Pollinators"
     ],
     "edible": null,
+    "caution": null,
     "useTags": [],
     "culture": null,
     "cultureSrc": null,
@@ -3061,6 +3079,7 @@
       "Butterflies"
     ],
     "edible": null,
+    "caution": null,
     "useTags": [],
     "culture": null,
     "cultureSrc": null,
@@ -3099,6 +3118,7 @@
       "Butterflies"
     ],
     "edible": null,
+    "caution": null,
     "useTags": [],
     "culture": null,
     "cultureSrc": null,
@@ -3401,6 +3421,7 @@
       "Butterflies"
     ],
     "edible": null,
+    "caution": null,
     "useTags": [],
     "culture": null,
     "cultureSrc": null,
@@ -3440,6 +3461,7 @@
       "Skipper host"
     ],
     "edible": null,
+    "caution": null,
     "useTags": [],
     "culture": null,
     "cultureSrc": null,
@@ -3478,6 +3500,7 @@
       "Cover"
     ],
     "edible": null,
+    "caution": null,
     "useTags": [],
     "culture": null,
     "cultureSrc": null,
@@ -3517,6 +3540,7 @@
       "Cover"
     ],
     "edible": null,
+    "caution": null,
     "useTags": [],
     "culture": null,
     "cultureSrc": null,
@@ -3644,6 +3668,7 @@
       "Cover"
     ],
     "edible": null,
+    "caution": null,
     "useTags": [],
     "culture": null,
     "cultureSrc": null,
@@ -3682,6 +3707,7 @@
       "Cover"
     ],
     "edible": null,
+    "caution": null,
     "useTags": [],
     "culture": null,
     "cultureSrc": null,
@@ -3693,7 +3719,7 @@
   {
     "id": 88,
     "sci": "Pascopyrum smithii",
-    "syn": "Agropyron smithii",
+    "syn": "Agropyron smithii, Elymus smithii",
     "common": "Western Wheatgrass",
     "family": "Poaceae",
     "type": "Grass",
@@ -3721,6 +3747,7 @@
       "Browse"
     ],
     "edible": null,
+    "caution": null,
     "useTags": [],
     "culture": null,
     "cultureSrc": null,
@@ -3760,6 +3787,7 @@
       "Cover"
     ],
     "edible": null,
+    "caution": null,
     "useTags": [],
     "culture": null,
     "cultureSrc": null,
@@ -3842,6 +3870,7 @@
       "Cover"
     ],
     "edible": null,
+    "caution": null,
     "useTags": [],
     "culture": null,
     "cultureSrc": null,
@@ -3921,6 +3950,7 @@
       "Butterflies"
     ],
     "edible": null,
+    "caution": null,
     "useTags": [],
     "culture": null,
     "cultureSrc": null,
@@ -3959,6 +3989,7 @@
       "Specialist bees"
     ],
     "edible": null,
+    "caution": null,
     "useTags": [],
     "culture": null,
     "cultureSrc": null,
@@ -3996,6 +4027,7 @@
       "Pollinators"
     ],
     "edible": null,
+    "caution": null,
     "useTags": [],
     "culture": null,
     "cultureSrc": null,
@@ -4034,6 +4066,7 @@
       "Pollinators"
     ],
     "edible": null,
+    "caution": null,
     "useTags": [],
     "culture": null,
     "cultureSrc": null,
@@ -4117,6 +4150,7 @@
       "Pollinators"
     ],
     "edible": null,
+    "caution": null,
     "useTags": [],
     "culture": null,
     "cultureSrc": null,
@@ -4200,6 +4234,7 @@
       "Butterflies"
     ],
     "edible": null,
+    "caution": null,
     "useTags": [],
     "culture": null,
     "cultureSrc": null,

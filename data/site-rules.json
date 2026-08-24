@@ -64,5 +64,18 @@
       "note": "beyond the home ignition zones; no ignitability floor imposed."
     }
   ],
-  "minWorkable": 12
+  "minWorkable": 12,
+  "thinWorkable": 20,
+  "analysisRadiusM": 120.0,
+  "aspectCoherence": {
+    "coherent": 0.65,
+    "incoherent": 0.4
+  },
+  "minAspectSlopeDeg": 2.0,
+  "coBbox": {
+    "west": -109.06,
+    "south": 36.99,
+    "east": -102.04,
+    "north": 41.0
+  }
 }
