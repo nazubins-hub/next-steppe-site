@@ -4,8 +4,27 @@
     {
       "name": "next-steppe-dev",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
       "port": 4321
+    },
+    {
+      "name": "next-steppe-pages",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "--yes",
+        "wrangler@3",
+        "pages",
+        "dev",
+        "dist",
+        "--port",
+        "8788",
+        "--compatibility-date",
+        "2024-11-01"
+      ],
+      "port": 8788
     }
   ]
 }

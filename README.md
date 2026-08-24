@@ -86,6 +86,42 @@ the generated file has the full dataset baked in, with no way to feed it gated
 data. `build-island.mjs` refuses to emit if a withheld rating still carries a
 value.
 
+## Tuning the browser to a visitor's site
+
+The browser's site panel takes a street address and measures the ground: elevation,
+slope and aspect from USGS 3DEP over the same 120 m radius the plant system's own
+site pipeline uses, folded into the same effective elevation and the same home
+ignition zone bands. Checked against three built site profiles it returns the same
+numbers `sitecore` does, which is the requirement — a visitor who runs this and then
+commissions an analysis must not be shown two accounts of their own hillside.
+
+It is a first pass and stays one. There is no soil, no snowpack, no skyline and
+therefore no sun hours; 3DEP is bare earth, so the house and the trees are in none
+of it. The panel says all of that on screen rather than in this file.
+
+**The measurement does not always win.** Aspect is reported with a coherence number,
+and below the threshold the plant system uses, the bearing is shown and deliberately
+*not* applied — on dissected mountain ground a single mean bearing frequently
+describes no part of the property, and a confident wrong aspect moves effective
+elevation by up to 3,000 ft. Every value stays editable underneath for the same
+reason: a geocode is a point on a road, not the house.
+
+**Hardiness zone is shown, not filtered on.** It comes from the USDA 2023 map by ZIP,
+and in Eagle County one ZIP spans thousands of feet. It also would not do anything:
+`zoneMin` is 4 or lower for 97 of the 104 species, so at any zone this valley reaches
+the filter removes nothing. Elevation is what actually selects.
+
+**This adds `functions/`, the first server-side code here.** `astro dev` cannot serve
+it, so the address lookup is dead in `npm run dev` — the panel's manual controls still
+work, which is the fallback it needs anyway. To exercise the real thing:
+
+```bash
+cd site && npx wrangler pages dev dist --compatibility-date 2024-11-01 --port 8788
+```
+
+See SECURITY.md § *The plant browser's address lookup* for where the address goes and
+why the geocode is proxied rather than called from the browser.
+
 ## Content
 
 - Blog posts: `src/content/blog/*.md`
@@ -146,3 +182,12 @@ module instead of the page. Do not upgrade the integration without upgrading Ast
 
 The synced database files are committed, so the Cloudflare build needs nothing from
 the local machine.
+
+`functions/` sits at this repo's root and is picked up automatically — Pages
+compiles it alongside the static build, with no adapter and no configuration. The
+site is still `output: 'static'`; `/api/site-lookup` is the only route that runs on
+a request.
+
+If it ever 404s in production, check the Pages project's **root directory** setting:
+Pages scans for `functions/` relative to it, so anything other than the repo root
+hides it. Nothing here needs that set — it is only a trap if someone changes it.

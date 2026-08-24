@@ -29,3 +29,7 @@ npm-debug.log*
 # vscode editor folder
 .vscode/*
 !.vscode/extensions.json
+
+# Local cache from `wrangler pages dev`, which is how functions/ is
+# exercised locally — astro dev cannot serve it. Regenerated on demand.
+.wrangler/
