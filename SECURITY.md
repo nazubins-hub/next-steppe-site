@@ -189,7 +189,7 @@ are involved and **they are deliberately reached by different routes**.
 
 | what | where it goes | who sees the address |
 |---|---|---|
-| geocode | `functions/api/site-lookup.js` → `geocoding.geo.census.gov` | this origin, and the Census Bureau |
+| geocode | `worker/site-lookup.js` → `geocoding.geo.census.gov` | this origin, and the Census Bureau |
 | hardiness zone | the same function → `phzmapi.org`, by **ZIP only** | neither sees the street address |
 | elevation / slope / aspect | the browser → `elevation.nationalmap.gov` | nobody — USGS is given coordinates |
 
@@ -205,13 +205,26 @@ Cloudflare's cache nor the browser keeps a copy. An address in a shared cache ke
 is an address in a shared cache. Do not add logging there "temporarily".
 
 **This is the first server-side code in this repo.** Everything else is static.
-`functions/` is picked up by Cloudflare Pages automatically at build time; there is
-no Astro adapter and the site is still `output: 'static'`. It also means
-`astro dev` cannot exercise it — use the Pages runtime:
+It lives in `worker/` and is wired up by `wrangler.jsonc`; there is no Astro
+adapter and the site is still `output: 'static'`. The Worker runs only for
+requests matching no static asset, so `/api/site-lookup` is the sole path that
+reaches code — every page and image is served without invoking it.
+
+`astro dev` cannot exercise it. Use the real runtime:
 
 ```bash
-cd site && npx wrangler pages dev dist --compatibility-date 2024-11-01 --port 8788
+npm run dev:worker
 ```
+
+**`_headers` still applies under Workers assets** — checked, not assumed. The CSP,
+HSTS, `X-Frame-Options` and `nosniff` all survive the move off Pages. Re-check it
+after any change to `wrangler.jsonc`: losing the CSP would be silent, and every
+page would keep rendering exactly as before.
+
+**Observability is deliberately off.** Enabling it samples request URLs into
+Cloudflare's logs, and this endpoint carries a street address in its query string.
+The no-logging promise above is only as good as that setting; `wrangler.jsonc`
+says so at the point where someone would switch it on.
 
 **Why the CSP gained a host and not two.** `connect-src` allows
 `elevation.nationalmap.gov` because the browser genuinely fetches it. It does *not*

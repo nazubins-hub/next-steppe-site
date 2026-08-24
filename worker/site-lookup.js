@@ -1,5 +1,5 @@
 /**
- * GET /api/site-lookup?address=…
+ * GET /api/site-lookup?address=…  — the handler; `worker/index.js` routes to it.
  *
  * Address -> coordinates + USDA hardiness zone, for the plant browser's
  * "tune this list to your site" panel.
@@ -171,10 +171,17 @@ async function lookup(request) {
   });
 }
 
-// A single `onRequest` rather than `onRequestGet`: exporting both a catch-all and
-// a method handler leaves which one wins up to the platform, and the answer has
-// changed between Pages runtime versions. One export, method checked here.
-export const onRequest = async ({ request }) =>
-  request.method === 'GET'
+// Exported for `worker/index.js`. This was `onRequest` against the Pages Functions
+// convention, which this project cannot use: the Cloudflare service behind
+// nextsteppe.garden is a Worker, not a Pages project, and a `functions/` directory
+// there is not merely ignored — it flipped the build off its Astro static preset
+// and the deploy failed with "Missing entry-point to Worker script or to assets
+// directory". See wrangler.jsonc, which now pins that down in the repo.
+// HEAD is allowed alongside GET. The runtime discards the body, so a HEAD costs
+// one upstream geocode for no payload — but rejecting it means `curl -I` answers
+// 405 on an endpoint that plainly works, which reads as a broken route to anyone
+// checking it and to any uptime monitor pointed at it.
+export const handleSiteLookup = async (request) =>
+  request.method === 'GET' || request.method === 'HEAD'
     ? lookup(request)
-    : new Response('Method Not Allowed', { status: 405, headers: { Allow: 'GET' } });
+    : new Response('Method Not Allowed', { status: 405, headers: { Allow: 'GET, HEAD' } });

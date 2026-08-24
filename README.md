@@ -111,12 +111,12 @@ and in Eagle County one ZIP spans thousands of feet. It also would not do anythi
 `zoneMin` is 4 or lower for 97 of the 104 species, so at any zone this valley reaches
 the filter removes nothing. Elevation is what actually selects.
 
-**This adds `functions/`, the first server-side code here.** `astro dev` cannot serve
+**This adds `worker/`, the first server-side code here.** `astro dev` cannot serve
 it, so the address lookup is dead in `npm run dev` — the panel's manual controls still
 work, which is the fallback it needs anyway. To exercise the real thing:
 
 ```bash
-cd site && npx wrangler pages dev dist --compatibility-date 2024-11-01 --port 8788
+npm run dev:worker
 ```
 
 See SECURITY.md § *The plant browser's address lookup* for where the address goes and
@@ -183,11 +183,26 @@ module instead of the page. Do not upgrade the integration without upgrading Ast
 The synced database files are committed, so the Cloudflare build needs nothing from
 the local machine.
 
-`functions/` sits at this repo's root and is picked up automatically — Pages
-compiles it alongside the static build, with no adapter and no configuration. The
-site is still `output: 'static'`; `/api/site-lookup` is the only route that runs on
-a request.
+**This is a Worker with static assets, not a Pages project.** The distinction is
+invisible until one route has to run code, and then it is total. `wrangler.jsonc`
+is the whole deploy configuration:
 
-If it ever 404s in production, check the Pages project's **root directory** setting:
-Pages scans for `functions/` relative to it, so anything other than the repo root
-hides it. Nothing here needs that set — it is only a trap if someone changes it.
+- `name: "dry-gulch-site"` is the identity of the existing service. Changing it
+  does not rename anything — it creates a second Worker and leaves the live one
+  serving the old build.
+- `main: "worker/index.js"` runs only for requests matching no static asset.
+  Every page, font and photograph is served by the asset server without invoking
+  it; `/api/site-lookup` is the one path that reaches code.
+- `assets.directory: "./dist"` — including `_headers`, so the CSP and HSTS
+  survive. Verified, because it is the kind of thing that fails silently.
+
+Astro is still `output: 'static'`; nothing here needs an adapter.
+
+**A `functions/` directory would break the build.** That is the Pages Functions
+convention, and on a Worker it is not merely ignored — it pushed the build off its
+Astro static preset and `wrangler deploy` failed with *"Missing entry-point to
+Worker script or to assets directory."* Server code goes in `worker/`.
+
+Until this file existed the build was configured entirely in the dashboard, where
+it could not be reviewed, diffed, or reproduced from a clean clone. It is in the
+repo now; change deployment here, not there.

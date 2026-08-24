@@ -30,6 +30,6 @@ npm-debug.log*
 .vscode/*
 !.vscode/extensions.json
 
-# Local cache from `wrangler pages dev`, which is how functions/ is
+# Local cache from `wrangler dev` (npm run dev:worker), which is how worker/ is
 # exercised locally — astro dev cannot serve it. Regenerated on demand.
 .wrangler/

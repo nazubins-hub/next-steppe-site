@@ -1,0 +1,37 @@
+{
+  // ── Deploy configuration for nextsteppe.garden ──
+  //
+  // This file did not exist until the plant browser needed one route to run
+  // code. Until then the whole build was configured in the Cloudflare dashboard,
+  // where it could not be reviewed, diffed, or reproduced from a clean clone —
+  // and the first change that touched deployment broke it, with an error
+  // ("Missing entry-point to Worker script or to assets directory") that no
+  // amount of reading this repository could have explained.
+  //
+  // `name` MUST stay `dry-gulch-site`. It is the identity of the existing
+  // service; a different value here does not rename anything, it creates a
+  // second Worker and leaves the live one serving the old build.
+  "name": "dry-gulch-site",
+
+  "main": "worker/index.js",
+  "compatibility_date": "2024-11-01",
+
+  "assets": {
+    // Astro's build output. `npm run build` writes it, including `_headers`,
+    // which is where the CSP and HSTS live.
+    "directory": "./dist",
+
+    // The Worker reaches the asset server through this binding, so a request
+    // matching no route still gets the built 404 page rather than one invented
+    // in worker/index.js.
+    "binding": "ASSETS",
+    "not_found_handling": "404-page"
+  }
+
+  // NO `observability` block, deliberately. Enabling it samples request URLs
+  // into Cloudflare's logs, and `/api/site-lookup?address=...` carries a
+  // visitor's street address in its query string. SECURITY.md promises that
+  // address is never logged; a debugging convenience switched on later would
+  // quietly make that false. If request logging is ever wanted, move the
+  // address to a POST body first.
+}
