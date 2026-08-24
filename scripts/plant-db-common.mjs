@@ -107,12 +107,17 @@ export const PUBLISHED_SIZES = ['thumb', 'card'];
 /**
  * Warn past this much committed imagery.
  *
- * Not a limit — a tripwire. At two roles for a hundred species, thumb+card at the
- * database's current WebP quality lands near 50 MB, and a repo quietly growing to
- * that size is the kind of thing noticed a year late. The warning makes the
- * trajectory visible while it is still cheap to re-tune the encoder.
+ * Not a limit — a tripwire. Cloudflare builds this repo from GitHub, so every
+ * derivative here is a permanent git object: a re-encode ADDS a blob, it does not
+ * replace one. 101 photographs at thumb+card is 17.6 MB today, and the stated goal
+ * of 800 slots lands near 70 MB in the working tree with more behind it in history.
+ *
+ * This was 40 MB, which is roughly 460 slots — past the point where moving to an
+ * object store stops being a decision and becomes a migration. 25 MB is about 290,
+ * which is early enough to still have the choice. It stays a warning and not an
+ * error because the right response is to plan, not to stop mid-sync.
  */
-export const IMAGE_BYTE_WARN = 40 * 1024 * 1024;
+export const IMAGE_BYTE_WARN = 25 * 1024 * 1024;
 
 /** Site-analysis constants, synced verbatim from the database. */
 export const SITE_RULES_DATA = 'data/site-rules.json';
