@@ -91,9 +91,23 @@ import BaseLayout from '../layouts/BaseLayout.astro';
     const button = form.querySelector('button[type="submit"]') as HTMLButtonElement;
     const originalLabel = button.textContent;
 
+    // Two shapes deliberately, because they carry different things.
+    //
+    // `show` takes a trusted static literal and may contain markup. `showText`
+    // takes a string that came back from Formspree — third-party data — and
+    // goes in as text, never as HTML. The error branch used to interpolate that
+    // response into innerHTML, which made SECURITY.md's claim that this site
+    // "renders no user input" false. The CSP would have stopped a script from
+    // running, but a CSP is the second line, not a reason to hand markup to a
+    // parser you did not write.
     const show = (kind: 'success' | 'error', html: string) => {
       status.className = `form-status is-${kind}`;
       status.innerHTML = html;
+    };
+
+    const showText = (kind: 'success' | 'error', text: string) => {
+      status.className = `form-status is-${kind}`;
+      status.textContent = text;
     };
 
     form.addEventListener('submit', async (event) => {
@@ -124,12 +138,11 @@ import BaseLayout from '../layouts/BaseLayout.astro';
         // Formspree reports validation problems as { errors: [{ message }] }.
         const data = await response.json().catch(() => null);
         const detail = data?.errors?.map((e: { message: string }) => e.message).join('. ');
-        show(
-          'error',
-          detail
-            ? `Couldn’t send that: ${detail}`
-            : 'Couldn’t send that just now. Please try again, or email me directly.',
-        );
+        if (detail) {
+          showText('error', `Couldn’t send that: ${detail}`);
+        } else {
+          show('error', 'Couldn’t send that just now. Please try again, or email me directly.');
+        }
       } catch {
         // Network failure, offline, or the request was blocked. Never swallow this —
         // give them a route that does not depend on the form working.
