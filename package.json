@@ -14,7 +14,7 @@
     "build:island": "node scripts/build-island.mjs",
     "check:plants": "node scripts/check-plant-db-fresh.mjs",
     "audit:plants": "node scripts/publish-audit.mjs",
-    "dev:worker": "npm run build && wrangler dev"
+    "dev:worker": "npm run build && wrangler dev --port 8788"
   },
   "dependencies": {
     "@astrojs/react": "3.6.3",
