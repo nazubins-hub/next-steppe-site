@@ -20,7 +20,7 @@ const posts = (await getCollection('blog', ({ data }) => !data.draft))
   .sort((a, b) => b.data.date.valueOf() - a.data.date.valueOf())
   .slice(0, 3);
 ---
-<BaseLayout title="Next Steppe — Xeriscape &amp; Stormwater Landscape Architecture, Vail Valley">
+<BaseLayout title="Next Steppe — Xeriscape Design &amp; Planning, Vail Valley">
   <section class="hero wrap">
     <span class="eyebrow">Site Plan &middot; Rev. 01</span>
     <h1>Landscapes designed<br />for where the water goes.</h1>

@@ -6,7 +6,7 @@ interface Props {
   description?: string;
 }
 
-const { title, description = 'Water-wise landscape design and stormwater-informed planting for the Vail Valley.' } = Astro.props;
+const { title, description = 'Xeriscape design and planning for the Vail Valley — water-wise landscapes and stormwater-informed planting at 7,400 feet.' } = Astro.props;
 const year = new Date().getFullYear();
 
 // Absolute URL for this page, for the canonical link and og:url.
@@ -47,7 +47,7 @@ const canonical = new URL(Astro.url.pathname, Astro.site).href;
     <div class="wrap header-inner">
       <a href="/" class="wordmark">
         <span class="wordmark-main">Next Steppe</span>
-        <span class="wordmark-sub">Landscape Architecture &amp; Stormwater Planning</span>
+        <span class="wordmark-sub">Xeriscape Design &amp; Planning</span>
       </a>
       <nav class="site-nav">
         <a href="/plants">Plants</a>
@@ -74,7 +74,7 @@ const canonical = new URL(Astro.url.pathname, Astro.site).href;
         <a href="/contact">Contact</a>
         <a href="/credits">Credits</a>
       </div>
-      <p class="footer-fine">&copy; {year} Next Steppe. Site built with Astro, hosted on Cloudflare Pages.</p>
+      <p class="footer-fine">&copy; {year} Next Steppe &mdash; Xeriscape Design &amp; Planning. Site built with Astro, hosted on Cloudflare Pages.</p>
     </div>
   </footer>
 </body>
