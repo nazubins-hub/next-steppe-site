@@ -1,16 +1,31 @@
 # Next Steppe — site
 
 Xeriscape plant reference and practice site for the Vail Valley, built with
-[Astro](https://astro.build), static output, deployed on Cloudflare Pages.
+[Astro](https://astro.build), static output, deployed as a **Cloudflare Worker
+with static assets** — not a Pages project. See *Deploying* for why that
+distinction matters.
 
 ## Local dev
 
+Two servers, and they are not interchangeable.
+
 ```bash
 npm install
-npm run dev
+npm run dev          # http://localhost:4321 — fast, HMR
 ```
 
-Site runs at `http://localhost:4321`.
+That is Astro's dev server and it does **not** run `worker/`, so
+`/api/site-lookup` 404s: the plant browser's Measure button fails and the pin map
+never appears. Fine for styling, copy and everything that is not the site lookup.
+
+```bash
+npm run dev:worker   # http://localhost:8788 — the real runtime
+```
+
+That builds `dist/` and serves it through `wrangler dev`, the same workerd
+runtime production uses — so the address lookup, the pin map and the `_headers`
+CSP all behave as they will live. It rebuilds on every start, so it is slower;
+reach for it when you touch the lookup, the map, the Worker or the CSP.
 
 ## The plant database
 
@@ -23,7 +38,7 @@ export PLANT_DB_PATH=/path/to/xeric-plant-system
 ```
 
 That repo's governing rule is that every fact has exactly one home — `plants.json`.
-Cloudflare Pages builds from GitHub and cannot reach it, so this repo has to carry
+Cloudflare builds this repo from GitHub and cannot reach that checkout, so this repo has to carry
 what the site needs. What it carries is **not a copy of the database**: it is
 `data/plants.public.json`, the *gated projection* of it.
 
@@ -106,18 +121,51 @@ describes no part of the property, and a confident wrong aspect moves effective
 elevation by up to 3,000 ft. Every value stays editable underneath for the same
 reason: a geocode is a point on a road, not the house.
 
+**The pin is what makes the geocode usable.** A Census match is interpolated
+along a street centreline, so it lands on the road; measured there, the Vail test
+address reads aspect coherence 0.38 and the correction is refused outright.
+Dragging the pin onto real ground reached 0.51, and the correction applied. The
+panel reports how far the pin has moved from the last reading, because 300 m of
+pin movement swings effective elevation by ~695 ft at that address — this is a
+high-leverage control and it says so rather than hiding it.
+
+A second pin is optional: mark the house as well and the defensible-space
+distance is measured instead of asked, and the distance buttons stand down. One
+pin is the common case and works alone.
+
+Imagery is USGS **NAIP Plus** orthoimagery (find your roof) and 3DEP hillshade
+(see which way the ground falls). Both keyless, both a bbox-to-image call — no
+mapping library, no tile CDN, one request per view.
+
+NAIP replaced `basemap.nationalmap.gov`, which accepted any request size while
+serving a coarser cache level behind it — its 512 px output was a 256 px image
+upscaled, and asking for 2048 changed nothing. NAIP is 60 cm native and carries
+roughly twice the real detail. Requests are 1024 px JPEG: JPEG because the
+content is photographic and it is 4.7× smaller than PNG for a difference nobody
+can see, 1024 because the stage is ~1046 device pixels on a 2× display. The
+caption names the survey year, read per-location from the raster catalogue —
+NAIP is a multi-year cycle, not a live feed, and anything planted since will not
+appear. Note that **shrinking the analysis radius is not
+a substitute**: at the road point that made coherence worse, not better. Moving
+the centre is the lever, which is why there is a pin and not a radius slider.
+
 **Hardiness zone is shown, not filtered on.** It comes from the USDA 2023 map by ZIP,
 and in Eagle County one ZIP spans thousands of feet. It also would not do anything:
 `zoneMin` is 4 or lower for 97 of the 104 species, so at any zone this valley reaches
 the filter removes nothing. Elevation is what actually selects.
 
-**This adds `worker/`, the first server-side code here.** `astro dev` cannot serve
-it, so the address lookup is dead in `npm run dev` — the panel's manual controls still
-work, which is the fallback it needs anyway. To exercise the real thing:
+**This adds `worker/`, the first server-side code here — and it changes how you
+preview.** There are now two local servers and they are not interchangeable:
 
-```bash
-npm run dev:worker
-```
+| | serves | address lookup | speed |
+|---|---|---|---|
+| `npm run dev` → :4321 | Astro dev, HMR | **no** — `/api/site-lookup` 404s | instant reload |
+| `npm run dev:worker` → :8788 | built `dist/` + the Worker | **yes** | full rebuild each time |
+
+`astro dev` knows nothing about `worker/`, so on :4321 the Measure button fails
+and the pin map never appears — the panel falls back to its manual controls,
+which is the fallback it needs anyway. Use it for styling and copy. Use
+`dev:worker` for anything touching the lookup, the map or the CSP.
 
 See SECURITY.md § *The plant browser's address lookup* for where the address goes and
 why the geocode is proxied rather than called from the browser.
@@ -174,14 +222,18 @@ module instead of the page. Do not upgrade the integration without upgrading Ast
 - `astro.config.mjs` still has `site: 'https://example.com'` — set it to the real
   domain when DNS is wired up.
 
-## Deploying (GitHub → Cloudflare Pages)
+## Deploying (GitHub → Cloudflare Workers)
 
-1. In the Cloudflare dashboard: **Workers & Pages → Create → Pages → Connect to Git**.
-2. Build settings: framework preset `Astro`, build command `npm run build`, output
-   directory `dist`.
+The service is **`dry-gulch-site`**, already connected to this repo. Pushing to
+`main` builds and deploys it; pushing any other branch builds without touching
+production. Build command is `npm run build`; everything else is `wrangler.jsonc`.
 
 The synced database files are committed, so the Cloudflare build needs nothing from
 the local machine.
+
+Setting one up from scratch is **Workers & Pages → Create → Workers**, not Pages —
+the two are different products and a Pages project will not read `wrangler.jsonc`
+or `worker/`.
 
 **This is a Worker with static assets, not a Pages project.** The distinction is
 invisible until one route has to run code, and then it is total. `wrangler.jsonc`

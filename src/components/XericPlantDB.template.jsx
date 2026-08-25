@@ -6,7 +6,7 @@
 // diverge from the data every other script reads.
 // ─────────────────────────────────────────────────────────────────
 
-import { useState, useMemo, Fragment } from "react";
+import { useState, useMemo, useRef, Fragment } from "react";
 
 /* ═══════════════════════════════════════════════════════════════════
    XERIC PLANT DATABASE v3 — Intermountain West
@@ -304,6 +304,13 @@ const LOOKUP_BUDGET_MS = 75000;
    is ignored by the service and defeats the cache entry, which is exactly what
    makes the second try worth making.
 
+   Its failures do not always arrive as a status code. An error response from the
+   origin often carries no Access-Control-Allow-Origin header, so the browser
+   rejects it as a CORS violation and `fetch` throws a TypeError before any
+   status is visible. That is why the catch below is unconditional rather than
+   keyed on `r.ok` — observed against Slope Degrees, which then succeeded on the
+   retry with identical parameters.
+
    The retry is bounded by the caller's DEADLINE rather than by a count. Three
    attempts against a service answering in 52 s is a two-and-a-half minute
    spinner, and nobody waits that long — they reload, and the reload starts the
@@ -419,7 +426,10 @@ async function measureWith(lat, lon, signal, deadline) {
     f: "json",
   }, signal, deadline);
 
-  const [point, aspectH, slopeH] = await Promise.all([
+  /* The imagery year rides along with the terrain reads rather than adding a
+     fourth wait. It resolves to null on any failure and never rejects, so it
+     cannot take the measurement down with it. */
+  const [point, aspectH, slopeH, imageryYear] = await Promise.all([
     getJSON("identify", {
       geometry: JSON.stringify({ x: lon, y: lat, spatialReference: { wkid: 4326 } }),
       geometryType: "esriGeometryPoint",
@@ -428,6 +438,7 @@ async function measureWith(lat, lon, signal, deadline) {
     }, signal, deadline),
     surface("Aspect Degrees"),
     surface("Slope Degrees"),
+    naipYear(lat, lon, signal),
   ]);
 
   const metres = Number(point && point.value);
@@ -464,7 +475,47 @@ async function measureWith(lat, lon, signal, deadline) {
     aspectDeg: asp ? Math.round(asp.deg * 10) / 10 : null,
     aspectCoherence: asp ? Math.round(asp.coherence * 100) / 100 : null,
     radiusM,
+    imageryYear,
   };
+}
+
+const NAIP_SERVER =
+  "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPPlus/ImageServer";
+
+/* When was the aerial flown?
+
+   NAIP is a survey on a multi-year cycle, not a live feed — over Eagle County the
+   current pass is 2019. A visitor looking at their own roof will read the picture
+   as current unless told otherwise, and a planting put in since simply will not be
+   there. So the year is shown beside the credit.
+
+   It is read from the raster name rather than a date field, because the date
+   fields come back null on this service while the name carries it:
+   `m_3910622_se_13_060_20191003` is a 60 cm tile flown 2019-10-03. Newest wins;
+   the mosaic overlaps several. Never hardcode a year — 2019 is true for this
+   valley and nowhere else. */
+async function naipYear(lat, lon, signal) {
+  try {
+    const q = new URLSearchParams({
+      geometry: JSON.stringify({ x: lon, y: lat, spatialReference: { wkid: 4326 } }),
+      geometryType: "esriGeometryPoint",
+      returnCatalogItems: "true", returnGeometry: "false", f: "json",
+    });
+    const r = await fetch(`${NAIP_SERVER}/identify?${q}`, { signal });
+    if (!r.ok) return null;
+    const d = await r.json();
+    const feats = ((d.catalogItems || {}).features) || [];
+    let best = null;
+    for (const f of feats) {
+      const m = /_(\d{4})(\d{2})(\d{2})$/.exec((f.attributes || {}).Name || "");
+      if (m && (!best || m[1] > best)) best = m[1];
+    }
+    return best;
+  } catch {
+    /* A missing year is a missing half-sentence, not a failed lookup. The map is
+       still usable and the terrain read is unaffected. */
+    return null;
+  }
 }
 
 /* The range guard's geographic half, on the same box as
@@ -474,6 +525,175 @@ async function measureWith(lat, lon, signal, deadline) {
 function outsideCoverage(lat, lon) {
   const b = SITE_RULES.coBbox;
   return lat < b.south || lat > b.north || lon < b.west || lon > b.east;
+}
+
+/* ═══════════════════ THE PIN ═══════════════════
+
+   WHY A MAP EARNS ITS PLACE HERE, when almost nothing else on this page does.
+
+   A Census geocode is a position interpolated along a street centreline. At
+   5027 Main Gore Dr N that segment carries house numbers 4901-5029, so the
+   returned point is a guess good to a few hundred metres — and it lands on the
+   ROAD. Measured there the aspect comes back at coherence 0.38, below
+   SITE_RULES.aspectCoherence.incoherent, so the panel refuses to apply any
+   aspect correction at all. The visitor gets nothing.
+
+   Moving the analysis point onto actual ground fixes that. Measured at the same
+   address, offsetting the centre and re-reading 3DEP:
+
+     geocoded road point   302°  coherence 0.38   refused
+     75 m east             276°  coherence 0.50   applied
+     75 m north            278°  coherence 0.45   applied
+     150 m north           266°  coherence 0.51   applied
+     150 m south           345°  coherence 0.51   applied
+
+   Five of six cross the gate. So the pin converts "no usable aspect" into a
+   usable one, which is the whole reason it exists.
+
+   AND IT IS A HIGH-LEVERAGE CONTROL, which the panel must not hide. Aspect
+   across those positions spans 266° to 345°, and through the offset curve that
+   is 695 ft of effective elevation across 300 m of pin movement. Today the
+   geocode error is invisible and the system defends itself by refusing; a pin
+   hands that responsibility to the visitor. They know which ground they are
+   planting, which is exactly why they should hold it — but the consequence has
+   to be on screen, not implied.
+
+   WHAT DOES NOT WORK: SHRINKING THE RADIUS.
+   `sources/elevation.py` advises narrowing `--radius` toward the planting area
+   when coherence is low. At this site that made it worse — 0.24 at 30 m, 0.31
+   at 60 m, against 0.38 at 120 m — because a tight radius around a road point
+   just resolves cut-and-fill benching. Moving the centre is the lever. Do not
+   add a radius control instead of this.
+
+   NO MAPPING LIBRARY. Both services take a bbox and return a PNG, which is a
+   static-map API: one request per view rather than a grid of tiles, no Leaflet
+   or MapLibre in the bundle, and `img-src` naming two hosts instead of a CDN.
+   Both are keyless, CORS-open and federal — the same trust boundary the terrain
+   read already crosses. */
+
+/* NAIP Plus, not the National Map's basemap tile cache.
+
+   `basemap.nationalmap.gov/USGSImageryOnly` accepts any request size and serves
+   a coarser cache level behind it. Measured over the Vail test address, halving
+   its 512 px output lost only 1.90/255 of information — it was a 256 px image
+   upscaled — and a 2048 px request differed from an upscaled 512 by 2.16/255,
+   under one percent. More pixels bought nothing; the ceiling was the source.
+
+   NAIP Plus is an ImageServer over 60 cm orthoimagery (2019 over Eagle County),
+   and the same test gives 3.07/255 — roughly twice the real detail, and the
+   difference between a green smear and a legible driveway at the zoom where
+   someone is trying to place a pin.
+
+   `USGSNAIPPlus` rather than `USGSNAIPImagery`: it adds High Resolution
+   Orthoimagery where that exists. Over Vail the two return byte-for-byte the
+   same image, so the wider one costs nothing and is better elsewhere in the
+   state.
+
+   NOT Esri World Imagery, which is sharper still at ~30 cm. Its copyright names
+   Esri and Vantor, anonymous access to services.arcgisonline.com is not licensed
+   for a commercial site, and `World_Imagery` is a cached tile service whose
+   export endpoint 500s — so it would also mean a grid of z/y/x tiles instead of
+   one image per view. `ingest.py` refuses CC-BY-NC photographs on exactly this
+   reasoning; imagery is not a special case. */
+const MAP_LAYERS = {
+  aerial: {
+    label: "Aerial",
+    hint: "find your roof",
+    url: `${NAIP_SERVER}/exportImage`,
+    /* Photographic content, so JPEG. At 1024 px the same view is 199 KB as JPEG
+       against 935 KB as PNG — 4.7x smaller for a 3.78/255 difference nobody can
+       see on a map, and smaller than the OLD 512 px PNG while carrying four
+       times the pixels. Without this the resolution bump would put a megabyte
+       on every pan. */
+    format: "jpg",
+    credit: "USGS NAIP orthoimagery",
+  },
+  hillshade: {
+    label: "Landform",
+    hint: "see which way it falls",
+    url: `${IMAGESERVER}/exportImage`,
+    rule: "Hillshade Gray",
+    /* JPEG here too. The guess was that smooth grayscale would favour PNG;
+       measured at 1024 it is 367 KB as PNG against 72 KB as JPEG. A hillshade
+       carries fine per-cell noise from the DEM, which is photographic in
+       character however grey it looks, and PNG cannot compress it. */
+    format: "jpg",
+    credit: "USGS 3DEP hillshade",
+  },
+};
+
+/* Requested at 1024 and scaled by CSS. The bbox is square and so is the image,
+   so the pixel-to-degree conversion stays uniform however it is displayed —
+   which is what lets a click be read against the element's own bounding box
+   rather than the requested size.
+
+   1024 rather than 512 for two independent reasons. The source now has detail to
+   resolve: at the default 500 m span, upscaling a 512 differs from a native 1024
+   by 7.07/255 against the old source's 2.16. And the stage renders about 523 CSS
+   px on desktop and 321 on mobile, which is 1046 and 642 device pixels on a 2x
+   display — 512 was under-sampled for the screen before resolution came into it. */
+const MAP_PX = 1024;
+
+/* How wide the map is, in metres, at each step. Starts at 500: wide enough to
+   contain a geocode that missed by a couple of hundred metres, tight enough
+   that a house is a recognisable shape. */
+const MAP_SPANS = [1600, 800, 500, 250, 120, 60];
+const MAP_SPAN_DEFAULT = 500;
+
+function from3857(x, y) {
+  const lon = x / (20037508.34 / 180);
+  const yd = y / (20037508.34 / 180);
+  const lat = (Math.atan(Math.exp((yd * Math.PI) / 180)) * 360) / Math.PI - 90;
+  return [lat, lon];
+}
+
+/* The square bbox for a view. Same 1/cos(latitude) correction as everywhere
+   else — Web Mercator metres are inflated ~1.30 at 39.6°N, and without it the
+   map would cover 30% less ground than the caption claims. */
+function mapBbox(view) {
+  const [cx, cy] = to3857(view.lon, view.lat);
+  const r = view.spanM / 2 / Math.cos((view.lat * Math.PI) / 180);
+  return { xmin: cx - r, ymin: cy - r, xmax: cx + r, ymax: cy + r, r };
+}
+
+function mapUrl(view, layerKey) {
+  const layer = MAP_LAYERS[layerKey];
+  const b = mapBbox(view);
+  const p = new URLSearchParams({
+    bbox: `${b.xmin},${b.ymin},${b.xmax},${b.ymax}`,
+    bboxSR: "3857", imageSR: "3857",
+    size: `${MAP_PX},${MAP_PX}`,
+    format: layer.format, f: "image",
+  });
+  if (layer.rule) p.set("renderingRule", JSON.stringify({ rasterFunction: layer.rule }));
+  return `${layer.url}?${p}`;
+}
+
+/* A click at (fx, fy) as a fraction of the image box -> coordinates. Fractions
+   rather than pixels so the caller can use the element's real size and the map
+   can be any width CSS gives it. */
+function mapPointAt(view, fx, fy) {
+  const b = mapBbox(view);
+  return from3857(b.xmin + fx * (b.xmax - b.xmin), b.ymax - fy * (b.ymax - b.ymin));
+}
+
+/* Where a coordinate sits within the current view, as fractions. Off-view
+   values fall outside 0..1 and the caller hides the marker. */
+function mapFractionOf(view, lat, lon) {
+  const b = mapBbox(view);
+  const [x, y] = to3857(lon, lat);
+  return [(x - b.xmin) / (b.xmax - b.xmin), (b.ymax - y) / (b.ymax - b.ymin)];
+}
+
+/* Distance in FEET between two coordinates.
+   Equirectangular, not haversine: over the few hundred feet that separate a
+   house from its own planting beds the difference is millimetres, and the
+   defensible-space bands are 5, 30 and 100 ft. Precision beyond the band edge
+   would be decoration. */
+function feetBetween(a, b) {
+  const mLat = (b.lat - a.lat) * 111320;
+  const mLon = (b.lon - a.lon) * 111320 * Math.cos((a.lat * Math.PI) / 180);
+  return Math.hypot(mLat, mLon) / M_PER_FT;
 }
 
 /* ═══════════════════════ SMALL PARTS ═══════════════════════ */
@@ -546,6 +766,23 @@ export default function XericPlantDB() {
   const [siteAddr, setSiteAddr]   = useState("");
   const [lookup, setLookup]       = useState({ status:"idle" });
   const [manualOpen, setManualOpen] = useState(false);
+
+  /* ── the pin ──
+     `pins.plant` is what gets measured; `pins.house` is optional and exists
+     only to compute the defensible-space distance instead of asking for it.
+     One pin is the common case and has to work alone, so the house pin is
+     added deliberately rather than demanded up front.
+
+     `measuredAt` records the coordinates the current reading came from. Without
+     it, moving the pin would silently leave numbers on screen that describe
+     somewhere else — the panel compares the two and says so. */
+  const [mapView, setMapView]     = useState(null);   // {lat, lon, spanM}
+  const [mapLayer, setMapLayer]   = useState("aerial");
+  const [pins, setPins]           = useState({ plant:null, house:null });
+  const [pinMode, setPinMode]     = useState("plant");
+  const [useHousePin, setUseHousePin] = useState(false);
+  const mapImgRef = useRef(null);
+  const dragRef   = useRef(null);
   const [view, setView]           = useState("cards");
   const [sortBy, setSortBy]       = useState("common");
   const [sortDir, setSortDir]     = useState("asc");
@@ -564,7 +801,14 @@ export default function XericPlantDB() {
     useF.length + wildlifeF.length + (edibleOnly ? 1 : 0) + (search ? 1 : 0);
 
   const effElev = effectiveElevation(siteElev, siteAspect, siteSlopePct);
-  const siteZone = zoneForDistance(siteDist);
+
+  /* With both pins down the distance is measured rather than chosen, and the
+     buttons stop being the source of truth. With one pin it is still a question
+     no public dataset can answer, so the buttons remain. */
+  const pinDistFt = (useHousePin && pins.plant && pins.house)
+    ? feetBetween(pins.house, pins.plant) : null;
+  const effDistFt = pinDistFt == null ? siteDist : pinDistFt;
+  const siteZone = zoneForDistance(effDistFt);
 
   const plants = useMemo(() => {
     const q = search.toLowerCase().trim();
@@ -606,7 +850,7 @@ export default function XericPlantDB() {
       return sortDir === "asc" ? av - bv : bv - av;
     });
   }, [search, typeF, waterF, hizF, zoneF, elevF, nativeOnly, deerOnly, psOnly, useF, wildlifeF,
-      edibleOnly, sortBy, sortDir, siteOn, siteElev, siteAspect, siteSlopePct, siteDist]);
+      edibleOnly, sortBy, sortDir, siteOn, siteElev, siteAspect, siteSlopePct, effDistFt]);
 
   /* Species the band would take but for an unpublished rating. Shown as a count,
      never as a list of names to plant — the whole point is that they are not
@@ -616,7 +860,7 @@ export default function XericPlantDB() {
     return PLANTS.filter(p =>
       !hasPublishedIgn(p) && p.ign >= siteZone.minIgn &&
       p.elevMin <= effElev.ft && p.elevMax >= effElev.ft).length;
-  }, [siteOn, siteElev, siteAspect, siteSlopePct, siteDist]);
+  }, [siteOn, siteElev, siteAspect, siteSlopePct, effDistFt]);
 
   const doSort = c => { if (sortBy === c) setSortDir(d => d === "asc" ? "desc" : "asc"); else { setSortBy(c); setSortDir("asc"); } };
 
@@ -673,6 +917,15 @@ export default function XericPlantDB() {
   /* Has the visitor moved a control away from what was measured? Compared on
      the rounded values the panel actually displays, so "8,546 ft" does not
      report itself as overridden because of a hidden decimal. */
+  /* How far the planting pin now sits from the point the current reading came
+     from. This is the guard against a stale number: 695 ft of effective
+     elevation rides on 300 m of pin movement at the test address, so a reading
+     that no longer describes the pin is worse than no reading. 30 ft of slop
+     absorbs a fingertip on a phone without nagging. */
+  const pinMovedFt = (measured && measured.measuredAt && pins.plant)
+    ? feetBetween(measured.measuredAt, pins.plant) : 0;
+  const pinMoved = pinMovedFt > 30;
+
   const overridden = !!measured && (
     siteElev !== measured.elevFt ||
     Math.round(siteSlopePct * 10) / 10 !== measured.slopePct ||
@@ -730,8 +983,15 @@ export default function XericPlantDB() {
         });
         return;
       }
-      const data = { ...geo, ...terrain };
+      const at = { lat: geo.lat, lon: geo.lon };
+      const data = { ...geo, ...terrain, measuredAt: at };
       applyMeasurement(data);
+      /* Open the map on the geocode, with the planting pin already on it. The
+         visitor refines from there rather than starting with an empty map and
+         having to find their own house cold. */
+      setMapView({ lat: geo.lat, lon: geo.lon, spanM: MAP_SPAN_DEFAULT });
+      setPins({ plant: at, house: null });
+      setPinMode("plant");
       setLookup({ status: "ok", data });
     } catch (err) {
       setLookup({
@@ -743,6 +1003,100 @@ export default function XericPlantDB() {
       });
     }
   };
+
+  /* Re-measure at the planting pin. Same guards as the address path — the range
+     check runs before the three USGS requests, not after them. */
+  const measureAtPin = async () => {
+    const at = pins.plant;
+    if (!at) return;
+    if (outsideCoverage(at.lat, at.lon)) {
+      setLookup(l => ({ ...l, status: "error",
+        message: "That pin is outside Colorado. This database is built for the "
+               + "Southern Rockies, and off that map it would return the residue "
+               + "of a filter rather than a palette." }));
+      return;
+    }
+    const keep = measured;
+    setLookup({ status: "loading", phase: "terrain" });
+    try {
+      const terrain = await measureTerrain(at.lat, at.lon);
+      if (terrain.elevFt == null) {
+        setLookup({ status: "error", message: "USGS has no elevation at that pin." });
+        return;
+      }
+      /* The geocode fields — matched address, precision, hardiness — describe
+         the ADDRESS and survive a pin move. Only the terrain is re-read. */
+      const data = { ...(keep || {}), ...terrain, measuredAt: at };
+      applyMeasurement(data);
+      setLookup({ status: "ok", data });
+    } catch (err) {
+      setLookup({ status: "error",
+        message: (err && err.message ? err.message + ". " : "")
+               + "USGS 3DEP is intermittent — try again, or set your site by hand below." });
+    }
+  };
+
+  /* ── map interaction ──
+     Panning moves the image with a CSS transform and commits ONE state update
+     on release. Updating state per pointermove would re-render the whole
+     component — including 104 plant cards — on every frame of a drag. */
+  const mapPointerDown = e => {
+    if (!mapView) return;
+    const el = mapImgRef.current;
+    if (!el) return;
+    /* Pointer capture keeps a drag tracking after the finger leaves the image.
+       It THROWS NotFoundError when the id is not an active pointer — which `?.`
+       does not protect against, since the method exists and the call fails.
+       Capture is an enhancement: without it a drag that wanders off the element
+       simply stops, which is a degradation and not a break. Never let it reach
+       the console. */
+    try { el.setPointerCapture?.(e.pointerId); } catch { /* not capturable */ }
+    dragRef.current = { x0:e.clientX, y0:e.clientY, dx:0, dy:0, moved:false };
+  };
+
+  const mapPointerMove = e => {
+    const d = dragRef.current;
+    if (!d) return;
+    d.dx = e.clientX - d.x0;
+    d.dy = e.clientY - d.y0;
+    if (Math.abs(d.dx) > 3 || Math.abs(d.dy) > 3) d.moved = true;
+    const el = mapImgRef.current;
+    if (el) el.style.transform = `translate(${d.dx}px, ${d.dy}px)`;
+  };
+
+  const mapPointerUp = e => {
+    const d = dragRef.current;
+    dragRef.current = null;
+    const el = mapImgRef.current;
+    if (!el || !mapView) return;
+    el.style.transform = "";
+    const box = el.getBoundingClientRect();
+
+    if (d && d.moved) {
+      // A drag: shift the view by the same fraction of the box the image moved.
+      const b = mapBbox(mapView);
+      const [lat, lon] = from3857(
+        (b.xmin + b.xmax) / 2 - (d.dx / box.width) * (b.xmax - b.xmin),
+        (b.ymin + b.ymax) / 2 + (d.dy / box.height) * (b.ymax - b.ymin));
+      setMapView(v => ({ ...v, lat, lon }));
+      return;
+    }
+
+    // A click: drop the active pin where they pressed.
+    const fx = (e.clientX - box.left) / box.width;
+    const fy = (e.clientY - box.top) / box.height;
+    if (fx < 0 || fx > 1 || fy < 0 || fy > 1) return;
+    const [lat, lon] = mapPointAt(mapView, fx, fy);
+    setPins(pp => ({ ...pp, [pinMode]: { lat, lon } }));
+  };
+
+  const zoomMap = dir => setMapView(v => {
+    if (!v) return v;
+    const i = MAP_SPANS.indexOf(v.spanM);
+    const cur = i === -1 ? MAP_SPANS.indexOf(MAP_SPAN_DEFAULT) : i;
+    const next = Math.min(MAP_SPANS.length - 1, Math.max(0, cur + dir));
+    return { ...v, spanM: MAP_SPANS[next] };
+  });
 
   const SitePanel = () => {
     const band = bandForPct(siteSlopePct);
@@ -890,6 +1244,123 @@ export default function XericPlantDB() {
               </div>
             )}
 
+            {/* ── the map ──
+                Appears only once there is something to centre it on. An empty
+                map asking a visitor to find their own house cold is a worse
+                starting point than the geocode, however rough the geocode is. */}
+            {mapView && (
+              <div className="xpdb-map">
+                <div className="xpdb-map-head">
+                  <div className="xpdb-map-layers">
+                    {Object.entries(MAP_LAYERS).map(([k, l]) => (
+                      <button key={k} type="button" title={l.hint}
+                        onClick={() => setMapLayer(k)}
+                        className={mapLayer === k ? "on" : ""}>{l.label}</button>
+                    ))}
+                  </div>
+                  <div className="xpdb-map-zoom">
+                    <button type="button" onClick={() => zoomMap(-1)} aria-label="Zoom out"
+                      disabled={mapView.spanM === MAP_SPANS[0]}>−</button>
+                    <span>{mapView.spanM} m</span>
+                    <button type="button" onClick={() => zoomMap(1)} aria-label="Zoom in"
+                      disabled={mapView.spanM === MAP_SPANS[MAP_SPANS.length - 1]}>+</button>
+                  </div>
+                </div>
+
+                <div className="xpdb-map-stage">
+                  {/* draggable=false: the browser's native image drag hijacks
+                      the pointer and the pan never starts. */}
+                  <img ref={mapImgRef} className="xpdb-map-img" draggable="false"
+                    alt={`${MAP_LAYERS[mapLayer].credit} centred on your site`}
+                    src={mapUrl(mapView, mapLayer)}
+                    onPointerDown={mapPointerDown}
+                    onPointerMove={mapPointerMove}
+                    onPointerUp={mapPointerUp}
+                    onPointerCancel={() => { dragRef.current = null; }} />
+
+                  {["plant", "house"].map(kind => {
+                    const pin = pins[kind];
+                    if (!pin) return null;
+                    if (kind === "house" && !useHousePin) return null;
+                    const [fx, fy] = mapFractionOf(mapView, pin.lat, pin.lon);
+                    if (fx < 0 || fx > 1 || fy < 0 || fy > 1) return null;
+                    return (
+                      <span key={kind}
+                        className={`xpdb-pin xpdb-pin-${kind}${pinMode === kind ? " active" : ""}`}
+                        style={{ left: `${fx * 100}%`, top: `${fy * 100}%` }}
+                        title={kind === "plant" ? "Where you are planting" : "The house"}>
+                        {kind === "plant" ? "✽" : "⌂"}
+                      </span>
+                    );
+                  })}
+                </div>
+
+                <div className="xpdb-map-controls">
+                  <div className="xpdb-map-which">
+                    <button type="button" onClick={() => setPinMode("plant")}
+                      className={pinMode === "plant" ? "on" : ""}>✽ Planting area</button>
+                    {useHousePin && (
+                      <button type="button" onClick={() => setPinMode("house")}
+                        className={pinMode === "house" ? "on" : ""}>⌂ House</button>
+                    )}
+                  </div>
+                  <label className="xpdb-map-two">
+                    <input type="checkbox" checked={useHousePin}
+                      onChange={e => {
+                        setUseHousePin(e.target.checked);
+                        setPinMode(e.target.checked ? "house" : "plant");
+                        if (!e.target.checked) setPins(pp => ({ ...pp, house:null }));
+                      }} />
+                    <span>Also mark the house</span>
+                  </label>
+                </div>
+
+                <p className="xpdb-map-tip">
+                  Drag to pan, tap to place the{" "}
+                  <b>{pinMode === "plant" ? "planting" : "house"}</b> pin.{" "}
+                  {MAP_LAYERS[mapLayer].credit}
+                  {/* Only the aerial has a survey date worth stating. The
+                      hillshade is terrain, and terrain does not go out of date
+                      the way a roofline does. */}
+                  {mapLayer === "aerial" && measured && measured.imageryYear
+                    && <>, flown {measured.imageryYear} — anything planted since
+                       will not be in it</>}.
+                </p>
+
+                {/* The distance is measured once both pins are down, so the
+                    band stops being a question. */}
+                {useHousePin && pinDistFt != null && (
+                  <p className="xpdb-map-dist">
+                    <b>{Math.round(pinDistFt)} ft</b> from the house — {siteZone.name}
+                    {siteZone.minIgn != null && <>, ignitability {siteZone.minIgn}+ only</>}.
+                  </p>
+                )}
+                {useHousePin && pinDistFt == null && (
+                  <p className="xpdb-map-tip">
+                    Place the house pin too and the distance is measured instead of asked.
+                  </p>
+                )}
+
+                {/* THE SENSITIVITY, ON SCREEN. Moving the pin 300 m at this
+                    address swings effective elevation by 695 ft, so a stale
+                    reading must never sit quietly beside a moved pin. */}
+                {pinMoved && (
+                  <p className="xpdb-map-stale">
+                    The pin has moved {Math.round(pinMovedFt)} ft from where these
+                    numbers were read. Aspect changes faster than most people expect
+                    across a property — measure again to tune to the new spot.
+                  </p>
+                )}
+
+                <button type="button" className="xpdb-map-measure"
+                  onClick={measureAtPin}
+                  disabled={lookup.status === "loading" || !pins.plant}>
+                  {lookup.status === "loading" ? "Measuring…"
+                    : pinMoved ? "Measure at the pin" : "Measure here again"}
+                </button>
+              </div>
+            )}
+
             {/* ── the manual controls ──
                 Kept, and pre-filled. The measurement is a point on a road read
                 against a bare-earth model: it does not know the house, the
@@ -935,19 +1406,31 @@ export default function XericPlantDB() {
 
                 <div className="xpdb-site-lab">
                   How far from the house?{" "}
-                  <span className="xpdb-site-onlyask">the one thing no dataset knows</span>
+                  {pinDistFt == null
+                    ? <span className="xpdb-site-onlyask">the one thing no dataset knows</span>
+                    : <span className="xpdb-site-onlyask">measured from your two pins</span>}
                 </div>
-                <div className="xpdb-site-row">
-                  {[3, 15, 60, 150].map(d => {
-                    const z = zoneForDistance(d);
-                    return (
-                      <button key={d} type="button" onClick={() => setSiteDist(d)}
-                        className={siteDist === d ? "on" : ""}>
-                        {z.fromFt}–{z.toFt} ft
-                      </button>
-                    );
-                  })}
-                </div>
+                {/* Two pins answer this, so the buttons go rather than sitting
+                    there implying a choice that no longer has an effect. */}
+                {pinDistFt == null ? (
+                  <div className="xpdb-site-row">
+                    {[3, 15, 60, 150].map(d => {
+                      const z = zoneForDistance(d);
+                      return (
+                        <button key={d} type="button" onClick={() => setSiteDist(d)}
+                          className={siteDist === d ? "on" : ""}>
+                          {z.fromFt}–{z.toFt} ft
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="xpdb-site-prov">
+                    <b>{Math.round(pinDistFt)} ft</b> between the house pin and the
+                    planting pin — {siteZone.name}. Clear the house pin above to set
+                    this by hand instead.
+                  </p>
+                )}
               </div>
             )}
 
@@ -1466,6 +1949,69 @@ export default function XericPlantDB() {
           text-decoration: underline; text-underline-offset: 2px;
         }
         .xpdb-site-adjust { align-self: flex-start; }
+
+        /* ── the map ── */
+        .xpdb-map {
+          display: flex; flex-direction: column; gap: .4rem;
+          padding: .6rem; border: 1px solid ${C.border}; background: ${C.bg};
+          max-width: 34rem;
+        }
+        .xpdb-map-head { display: flex; justify-content: space-between; align-items: center; gap: .5rem; }
+        .xpdb-map-layers, .xpdb-map-zoom, .xpdb-map-which { display: flex; gap: .25rem; align-items: center; }
+        .xpdb-map-layers button, .xpdb-map-which button, .xpdb-map-zoom button {
+          padding: .2rem .5rem; cursor: pointer; font: 500 .75rem/1.4 inherit;
+          border: 1px solid ${C.border}; background: #fff; color: ${C.text}; border-radius: 3px;
+        }
+        .xpdb-map-layers button.on, .xpdb-map-which button.on {
+          background: ${C.primary}; color: #fff; border-color: ${C.primary};
+        }
+        .xpdb-map-zoom button { width: 1.7rem; text-align: center; font-weight: 700; }
+        .xpdb-map-zoom button[disabled] { opacity: .35; cursor: default; }
+        .xpdb-map-zoom span {
+          font-size: .7rem; color: ${C.muted}; min-width: 3.2rem; text-align: center;
+          font-variant-numeric: tabular-nums;
+        }
+
+        /* Square, because the bbox is square. Any other aspect ratio would
+           stretch the imagery and put the pins in the wrong place. */
+        .xpdb-map-stage {
+          position: relative; width: 100%; aspect-ratio: 1 / 1;
+          overflow: hidden; border: 1px solid ${C.border}; background: #ded7c6;
+          touch-action: none;   /* or the browser pans the page instead of the map */
+          cursor: crosshair;
+        }
+        .xpdb-map-img {
+          width: 100%; height: 100%; display: block;
+          user-select: none; -webkit-user-drag: none;
+        }
+        .xpdb-pin {
+          position: absolute; transform: translate(-50%, -50%);
+          font-size: 1.05rem; line-height: 1; pointer-events: none;
+          text-shadow: 0 0 3px #fff, 0 0 6px #fff, 0 0 2px #fff;
+        }
+        .xpdb-pin-plant { color: ${C.primary}; }
+        .xpdb-pin-house { color: ${C.accent}; }
+        .xpdb-pin.active { font-size: 1.35rem; font-weight: 700; }
+
+        .xpdb-map-controls {
+          display: flex; justify-content: space-between; align-items: center;
+          gap: .5rem; flex-wrap: wrap;
+        }
+        .xpdb-map-two { display: flex; align-items: center; gap: .35rem; font-size: .75rem; color: ${C.text}; cursor: pointer; }
+        .xpdb-map-two input { accent-color: ${C.primary}; }
+        .xpdb-map-tip { margin: 0; font-size: .72rem; color: ${C.muted}; line-height: 1.45; }
+        .xpdb-map-dist { margin: 0; font-size: .8rem; color: ${C.text}; }
+        .xpdb-map-dist b { color: ${C.primary}; }
+        .xpdb-map-stale {
+          margin: 0; padding: .4rem .5rem; font-size: .76rem; line-height: 1.45;
+          color: ${C.accent}; background: #fbeee6; border: 1px solid ${C.accent}; border-radius: 3px;
+        }
+        .xpdb-map-measure {
+          padding: .45rem .8rem; cursor: pointer; align-self: flex-start;
+          background: ${C.primary}; color: #fff; border: 1px solid ${C.primary};
+          border-radius: 3px; font: 600 .82rem/1.3 inherit;
+        }
+        .xpdb-map-measure[disabled] { opacity: .5; cursor: default; }
         .xpdb-site-out {
           margin-top: .6rem; padding-top: .7rem; border-top: 1px solid ${C.border};
           font-size: .85rem; color: ${C.text}; display: flex; flex-direction: column; gap: .4rem;

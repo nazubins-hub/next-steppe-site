@@ -29,9 +29,17 @@ What the site actually is:
   become request input the moment an adapter or SSR is introduced, which is one more
   reason the re-review trigger below matters.
 
-Cloudflare Pages serves pre-rendered files. No request reaches Astro at runtime, so
+Cloudflare serves pre-rendered files from the Worker's static-asset store. **No
+request reaches Astro at runtime** — the framework runs at build time only — so
 advisories about reflected XSS, header manipulation, middleware auth bypass, and
 Host-header SSRF have nothing to act on.
+
+That claim survived the introduction of `worker/`, but only just, and the reason
+is worth stating: the Worker is not Astro and does not render markup. It answers
+one route, `/api/site-lookup`, with JSON, and hands everything else back to the
+asset server. Nothing it returns is HTML, and nothing it receives is interpolated
+into a page. **If a future route ever renders markup, this paragraph stops being
+true** and the Astro advisories above need re-reading against it.
 
 Verify the claims above still hold:
 
@@ -175,7 +183,8 @@ Expect only these, and nothing else:
 | `www.inaturalist.org` | each borrowed photograph's `sourceUrl` — a CC-BY obligation, on `/credits` and the species pages |
 | `creativecommons.org` | the licence deeds those credits link to |
 | `cloudflareinsights.com`, `static.cloudflareinsights.com` | named in the CSP, not fetched by any markup here |
-| `elevation.nationalmap.gov` | USGS 3DEP, fetched by the plant browser's address lookup — **the one third-party request this site makes**, and only after a visitor types an address and presses Measure |
+| `elevation.nationalmap.gov` | USGS 3DEP — the terrain read behind the plant browser's address lookup, and the hillshade layer of its pin map |
+| `imagery.nationalmap.gov` | USGS NAIP Plus orthoimagery — the pin map's default layer, and the survey-year probe behind its caption |
 
 **No `fonts.googleapis.com`.** Most of these are link *targets* in the markup, not
 requests the page makes. Cloudflare's beacon is injected at the edge and so never
@@ -192,6 +201,7 @@ are involved and **they are deliberately reached by different routes**.
 | geocode | `worker/site-lookup.js` → `geocoding.geo.census.gov` | this origin, and the Census Bureau |
 | hardiness zone | the same function → `phzmapi.org`, by **ZIP only** | neither sees the street address |
 | elevation / slope / aspect | the browser → `elevation.nationalmap.gov` | nobody — USGS is given coordinates |
+| map imagery | the browser → `imagery.nationalmap.gov` / `elevation.nationalmap.gov` | nobody — a bounding box, never the address |
 
 The split is the point. The Census geocoder sends no `Access-Control-Allow-Origin`,
 so it *had* to be proxied — but having a proxy also means the typed address never
@@ -225,6 +235,19 @@ page would keep rendering exactly as before.
 Cloudflare's logs, and this endpoint carries a street address in its query string.
 The no-logging promise above is only as good as that setting; `wrangler.jsonc`
 says so at the point where someone would switch it on.
+
+**The pin map adds `img-src`, not a tile CDN.** Both imagery services take a
+bounding box and return one PNG, so a view is a single `<img>` rather than a grid
+of tiles, and there is no mapping library in the bundle. `img-src` names the two
+federal hosts explicitly — note it does **not** inherit `connect-src`, so
+`elevation.nationalmap.gov` had to be listed again even though the terrain read
+already used it, and `imagery.nationalmap.gov` appears in **both**: the map tile
+is an `<img>` and the imagery-year probe is a `fetch` against the same server.
+Drop either and a different half of the same feature stops working.
+
+A map request reveals a bounding box: coarser than the coordinates USGS already
+receives for the terrain read, and to the same federal operator. It does not
+reveal the address, which never leaves this origin.
 
 **Why the CSP gained a host and not two.** `connect-src` allows
 `elevation.nationalmap.gov` because the browser genuinely fetches it. It does *not*

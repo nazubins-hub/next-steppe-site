@@ -68,7 +68,22 @@ const csp = [
   // allowance unnecessary; see the connect-src note below, which is its other half.
   `script-src ${scriptSrc} https://static.cloudflareinsights.com`,
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data:",
+  // The site panel's pin map. Both are keyless federal imagery services that
+  // take a bbox and return a PNG — a static-map API, so this is one <img> per
+  // view rather than a grid of tiles from a CDN, and no mapping library.
+  //
+  //   imagery.nationalmap.gov    USGS NAIP Plus orthoimagery: how a visitor finds
+  //                              their own roof. Replaced basemap.nationalmap.gov,
+  //                              which served a coarser cache level than it
+  //                              accepted requests for — see MAP_LAYERS.
+  //   elevation.nationalmap.gov  3DEP hillshade: how they see which way the
+  //                              ground falls. Already in connect-src for the
+  //                              terrain read — img-src is a SEPARATE directive
+  //                              and does not inherit it.
+  //
+  // These see coordinates, never the address: the geocode goes through
+  // /api/site-lookup on this origin. Same boundary the terrain read crosses.
+  "img-src 'self' data: https://imagery.nationalmap.gov https://elevation.nationalmap.gov",
   "font-src 'self'",
   // Two separate consumers here, each needing a different host:
   //
@@ -91,7 +106,14 @@ const csp = [
   //                          which is 'self' and needs no entry here. That split is
   //                          deliberate and this comment is where it is recorded —
   //                          adding a geocoding host to this line would undo it.
-  "connect-src 'self' https://formspree.io https://cloudflareinsights.com https://elevation.nationalmap.gov",
+  //
+  //   imagery.nationalmap  in connect-src as well as img-src, and for a different
+  //     .gov               reason: the map IMAGE is an <img> (img-src), but the
+  //                        imagery survey year is read with fetch() against the
+  //                        same ImageServer's identify endpoint, and fetch is
+  //                        governed by connect-src. Dropping either one breaks a
+  //                        different half of the same feature.
+  "connect-src 'self' https://formspree.io https://cloudflareinsights.com https://elevation.nationalmap.gov https://imagery.nationalmap.gov",
   'form-action https://formspree.io',
   "frame-ancestors 'none'",
   "base-uri 'none'",
