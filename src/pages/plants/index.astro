@@ -9,7 +9,7 @@ import { hasPublishedIgn } from '../../lib/publish-gate.js';
 const all = plants;
 
 // The static "All species" list that used to sit below the browser is gone. It
-// existed only to give crawlers links to the 100 species pages; the browser's cards
+// existed only to give crawlers links to the species pages; the browser's cards
 // now link out themselves, and Astro pre-renders the island, so those links are in
 // the served HTML either way. Keeping both meant listing every species twice on one
 // very long page — which was part of what made the scrolling feel bad.
@@ -18,7 +18,7 @@ const native = all.filter((p) => p.native).length;
 ---
 <BaseLayout
   title="Plant Database — Next Steppe"
-  description="A xeric plant reference for the Colorado Rockies: 100 species with water use, elevation range, fire placement and design notes, sourced and cited."
+  description={`A xeric plant reference for the Colorado Rockies: ${all.length} species with water use, elevation range, fire placement and design notes, sourced and cited.`}
 >
   <section class="wrap intro-section">
     <span class="eyebrow">Reference</span>
