@@ -227,15 +227,22 @@ function clearsFloor(p, minIgn) {
    Elevation, slope and aspect for a street address, read from the same USGS
    3DEP ImageServer that scripts/sitecore/sources/elevation.py reads, over the
    same analysis radius (SITE_RULES.analysisRadiusM), at the same 128-cell grid.
-   Checked against three built site profiles it returns the same numbers:
+   Checked against three built site profiles it returned the same numbers:
 
      vail-north    elev 8287.9 ft (8287.9)  aspect 23.6° (23.8)  coh 0.85 (0.85)  slope 37.4% (37.4)
      vail-test     elev 8183.9 ft (8183.9)  aspect 202.1° (203.1) coh 0.52 (0.52)  slope 10.0% (10.0)
      grenada-glen  elev 7941.9 ft (7941.9)  aspect 276.9° (278.0) coh 0.87 (0.87)  slope 25.4% (25.4)
 
+   THOSE FIGURES WERE TAKEN AT A 120 m RADIUS and the default is now 15 — see
+   sitecore/resolve.DEFAULT_RADIUS_M. They are kept because what they establish
+   is the METHOD agreeing, not the specific numbers: same histogram, same grid,
+   same circular statistics. Any profile built before that change records its own
+   `aoiRadiusM` and will legitimately differ from this panel until it is rebuilt.
+
    That agreement is the requirement, not a nicety. A visitor who runs this and
    then commissions an analysis must not be shown two different accounts of
-   their own hillside, so this measures what the pipeline measures or it has no
+   their own hillside, so this measures what the pipeline measures — from one
+   shared constant, which is the only reason it can keep doing so — or it has no
    business reporting a number at all.
 
    WHY THE GEOCODE GOES THROUGH THIS ORIGIN
@@ -246,10 +253,16 @@ function clearsFloor(p, minIgn) {
 
    WHY NOT ONE POINT SAMPLE, WHICH WOULD BE ONE CALL AND NO ARITHMETIC
    Because it is wrong. `identify` with the Aspect Degrees rule at
-   5027 Main Gore Dr N returns 237° — south-west — for ground whose 120 m
+   5027 Main Gore Dr N returns 237° — south-west — for ground whose area
    average faces 302°, north-west. A 65° error on the input that moves effective
    elevation by up to 3,000 ft, produced by a single 1 m cell sitting on a
    driveway berm. The area histogram is the entire point.
+
+   That failure is also the floor under SITE_RULES.analysisRadiusM. The radius
+   came down from 120 m to 15 m once the pin gave the reading a centre worth
+   trusting, but it stops there: a 2-8 m² bed is two to eight cells of a 1 m
+   grid, and at that size one berm cell is the answer again. Measured, a 2 m pin
+   nudge moves slope by 3.2 points at a 3 m radius and 0.8 at 15 m.
 
    WHY A HISTOGRAM RATHER THAN THE RASTER
    `computeHistograms` returns the distribution over an envelope as JSON, in one
@@ -558,12 +571,19 @@ function outsideCoverage(lat, lon) {
    planting, which is exactly why they should hold it — but the consequence has
    to be on screen, not implied.
 
-   WHAT DOES NOT WORK: SHRINKING THE RADIUS.
-   `sources/elevation.py` advises narrowing `--radius` toward the planting area
-   when coherence is low. At this site that made it worse — 0.24 at 30 m, 0.31
-   at 60 m, against 0.38 at 120 m — because a tight radius around a road point
-   just resolves cut-and-fill benching. Moving the centre is the lever. Do not
-   add a radius control instead of this.
+   SHRINKING THE RADIUS ONLY WORKS ONCE THE CENTRE IS RIGHT — AND NOW IT IS.
+   Narrowing toward the planting area made things WORSE at this site while the
+   centre was the geocode: 0.24 at 30 m and 0.31 at 60 m against 0.38 at 120 m,
+   because a tight radius around a road point just resolves the cut-and-fill
+   benching of the road. That is still true and still the reason the order
+   matters — centre first, then radius.
+
+   The pin supplies the centre, so the radius could follow it down: 120 m to
+   15 m, measured across six garden points and recorded in
+   sitecore/resolve.DEFAULT_RADIUS_M. It is deliberately NOT a control the
+   visitor can turn. There is one defensible value given a 1 m DEM, the panel
+   uses it, and a slider would only offer people a way to tune their way to a
+   coherence number they liked.
 
    NO MAPPING LIBRARY. Both services take a bbox and return a PNG, which is a
    static-map API: one request per view rather than a grid of tiles, no Leaflet
@@ -1182,8 +1202,9 @@ export default function XericPlantDB() {
   // desktop always shows the filters no matter what the toggle last did on mobile.
   /* ═══════════════════ SITE PANEL ═══════════════════
      An address, measured. 3DEP gives elevation, slope and aspect over the same
-     120 m radius a site profile uses, and those three become the same effective
-     elevation and fire band the full analysis computes.
+     radius a site profile uses (SITE_RULES.analysisRadiusM), and those three
+     become the same effective elevation and fire band the full analysis
+     computes.
 
      THE MEASUREMENT DOES NOT ALWAYS GET TO WIN.
      Aspect is the input that moves effective elevation by up to 3,000 ft, and
@@ -1691,7 +1712,7 @@ export default function XericPlantDB() {
             {lookup.status === "loading" && (
               <p className="xpdb-site-prov" role="status">
                 {lookup.phase === "terrain"
-                  ? "Reading the terrain from USGS 3DEP — elevation, slope and aspect over 120 m. This takes a few seconds, and longer when the service is busy."
+                  ? `Reading the terrain from USGS 3DEP — elevation, slope and aspect over ${SITE_RULES.analysisRadiusM} m around the pin. This takes a few seconds, and longer when the service is busy.`
                   : "Finding the address…"}
               </p>
             )}
