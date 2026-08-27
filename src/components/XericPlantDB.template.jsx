@@ -6,7 +6,7 @@
 // diverge from the data every other script reads.
 // ─────────────────────────────────────────────────────────────────
 
-import { useState, useMemo, useRef, Fragment } from "react";
+import { useState, useMemo, useRef, useEffect, Fragment } from "react";
 
 /* ═══════════════════════════════════════════════════════════════════
    XERIC PLANT DATABASE v3 — Intermountain West
@@ -595,50 +595,98 @@ function outsideCoverage(lat, lon) {
    export endpoint 500s — so it would also mean a grid of z/y/x tiles instead of
    one image per view. `ingest.py` refuses CC-BY-NC photographs on exactly this
    reasoning; imagery is not a special case. */
+/* WHICH UPSTREAM EACH LAYER MEANS NOW LIVES IN worker/map-tile.js, along with
+   the JPEG decision for both (measured at 1024: aerial 199 KB as JPEG against
+   935 KB as PNG; hillshade 72 KB against 367 KB — a hillshade carries per-cell
+   DEM noise that is photographic in character however grey it looks). The
+   browser addresses `/api/map-tile` and names a layer; it no longer holds a
+   service URL, because the tile cache is what makes the map usable and the
+   cache lives at the edge. What is left here is what the visitor sees. */
 const MAP_LAYERS = {
   aerial: {
     label: "Aerial",
     hint: "find your roof",
-    url: `${NAIP_SERVER}/exportImage`,
-    /* Photographic content, so JPEG. At 1024 px the same view is 199 KB as JPEG
-       against 935 KB as PNG — 4.7x smaller for a 3.78/255 difference nobody can
-       see on a map, and smaller than the OLD 512 px PNG while carrying four
-       times the pixels. Without this the resolution bump would put a megabyte
-       on every pan. */
-    format: "jpg",
     credit: "USGS NAIP orthoimagery",
   },
   hillshade: {
     label: "Landform",
     hint: "see which way it falls",
-    url: `${IMAGESERVER}/exportImage`,
-    rule: "Hillshade Gray",
-    /* JPEG here too. The guess was that smooth grayscale would favour PNG;
-       measured at 1024 it is 367 KB as PNG against 72 KB as JPEG. A hillshade
-       carries fine per-cell noise from the DEM, which is photographic in
-       character however grey it looks, and PNG cannot compress it. */
-    format: "jpg",
     credit: "USGS 3DEP hillshade",
   },
 };
 
-/* Requested at 1024 and scaled by CSS. The bbox is square and so is the image,
-   so the pixel-to-degree conversion stays uniform however it is displayed —
-   which is what lets a click be read against the element's own bounding box
-   rather than the requested size.
+/* ═══════════════════ THE MAP IS A TILE GRID ═══════════════════
 
-   1024 rather than 512 for two independent reasons. The source now has detail to
-   resolve: at the default 500 m span, upscaling a 512 differs from a native 1024
-   by 7.07/255 against the old source's 2.16. And the stage renders about 523 CSS
-   px on desktop and 321 on mobile, which is 1046 and 642 device pixels on a 2x
-   display — 512 was under-sampled for the screen before resolution came into it. */
+   IT WAS NOT, AND THAT WAS THE BUG. The map used to be one `exportImage`
+   request per view, with a bbox built from wherever the drag happened to stop.
+   Measured against USGSNAIPPlus over the Vail test address:
+
+     new bbox, 500 m span   17.7 s        new bbox, 250 m span   21.6 s
+     new bbox, 120 m span   15.5 s        the SAME url again      0.14 s
+
+   and the response carries `x-cache: Hit from cloudfront`, `max-age=43200`.
+   The imagery was never slow. USGS renders on demand behind a twelve-hour CDN,
+   and every pan minted a URL nobody had ever requested — a guaranteed miss,
+   then fifteen to twenty-two seconds of the stage's beige background. Panning
+   to an arbitrary float centre cannot hit a cache, ever, by construction.
+
+   So the view is quantised onto the standard Web Mercator tile grid. Integer
+   z/x/y, the same ground always producing the same URL. Three consequences,
+   and all three are the point:
+
+     - the edge cache can hit, so a revisit is 0.14 s rather than 17 s;
+     - a pan reuses the <img> elements already decoded, keyed by z/x/y, so
+       moving half a tile costs NO network at all;
+     - tiles carry one tile of margin beyond the stage, so the common small
+       pan is already on screen before the finger moves.
+
+   Tiles are fetched through `/api/map-tile` rather than from USGS directly.
+   See worker/map-tile.js: it holds the render at our own edge for a week
+   instead of USGS's twelve hours, and it lets the address lookup pre-warm the
+   first nine tiles while the visitor is still reading their elevation — which
+   is the only thing that hides a cold render, because nothing makes one fast. */
+
+/* One tile is 1024 px and the stage shows exactly one tile of ground.
+
+   1024 rather than 256: this is not a real tile pyramid. Every tile is an
+   on-demand render, so the cost is a render and not a byte count — sixteen
+   256 px tiles cost sixteen renders where one 1024 costs one. And it lands the
+   resolution where the source is: at z16 a tile spans 471 m, or 0.46 m/px,
+   which is the native resolution of the 60 cm NAIP underneath. The stage
+   renders about 523 CSS px on desktop, so a 1024 px tile is a clean 2x on the
+   retina displays this is mostly read on. */
 const MAP_PX = 1024;
 
-/* How wide the map is, in metres, at each step. Starts at 500: wide enough to
-   contain a geocode that missed by a couple of hundred metres, tight enough
-   that a house is a recognisable shape. */
-const MAP_SPANS = [1600, 800, 500, 250, 120, 60];
-const MAP_SPAN_DEFAULT = 500;
+/* Standard Web Mercator zoom levels, not metre spans.
+
+   The old MAP_SPANS were [1600, 800, 500, 250, 120, 60] and arbitrary. These
+   are the levels the world grid actually has, which is what makes quantisation
+   exact: a level is a power-of-two subdivision, so a tile boundary is an
+   integer and never drifts. Ground span per tile, at Colorado's latitude:
+
+     z14 1885 m   z15 942 m   z16 471 m   z17 235 m
+     z18 118 m    z19  59 m   z20  29 m
+
+   z16 is the default because it is what the old 500 m default was chosen to
+   be — wide enough to contain a geocode that missed by a couple of hundred
+   metres, tight enough that a house is a recognisable shape. NAIP is 60 cm, so
+   z19 is the last level with real detail behind it; z20 is offered anyway
+   because placing a pin precisely is worth an oversampled pixel. */
+const MAP_Z_MIN = 14;
+const MAP_Z_MAX = 20;
+const MAP_Z_DEFAULT = 16;
+
+const MERC = 20037508.342789244;
+
+/* Mercator metres per tile at a zoom. Mercator, not ground — the grid is
+   defined in projected metres, and the 1/cos(latitude) inflation is a property
+   of where you then look at it, not of the grid. */
+const mercTile = z => (MERC * 2) / 2 ** z;
+
+/* Ground metres across the stage, for the caption. THIS is where the ~1.30
+   inflation at 39.6°N gets divided back out; quoting the mercator figure would
+   overstate the visible ground by thirty percent. */
+const groundSpanM = view => mercTile(view.z) * Math.cos((view.lat * Math.PI) / 180);
 
 function from3857(x, y) {
   const lon = x / (20037508.34 / 180);
@@ -647,31 +695,75 @@ function from3857(x, y) {
   return [lat, lon];
 }
 
-/* The square bbox for a view. Same 1/cos(latitude) correction as everywhere
-   else — Web Mercator metres are inflated ~1.30 at 39.6°N, and without it the
-   map would cover 30% less ground than the caption claims. */
+/* The stage's own bbox in mercator metres: one tile wide, centred on the view.
+   Square, so the pixel-to-metre conversion stays uniform however CSS sizes it —
+   which is what lets a click be read against the element's bounding box. */
 function mapBbox(view) {
   const [cx, cy] = to3857(view.lon, view.lat);
-  const r = view.spanM / 2 / Math.cos((view.lat * Math.PI) / 180);
-  return { xmin: cx - r, ymin: cy - r, xmax: cx + r, ymax: cy + r, r };
+  const s = mercTile(view.z);
+  return { xmin: cx - s / 2, ymin: cy - s / 2, xmax: cx + s / 2, ymax: cy + s / 2, s };
 }
 
-function mapUrl(view, layerKey) {
-  const layer = MAP_LAYERS[layerKey];
+/* Which tiles cover the stage, optionally with a ring of margin around them.
+
+   TWO CALLS, IN THIS ORDER, AND THE ORDER IS THE WHOLE POINT.
+
+   The stage is one tile wide but sits at an arbitrary offset, so it straddles
+   two tiles per axis: four tiles are visible. Ringed by a margin that is four
+   per axis, or SIXTEEN — and at 187 KB a tile that is three megabytes and
+   sixteen cold renders before anything appears, which would have traded one
+   long wait for a longer one.
+
+   So `margin: 0` is what renders first, and the ring follows once those four
+   have decoded. The visible tiles get the browser's six connections to
+   themselves instead of queueing behind twelve they do not need yet, and the
+   margin — which is what makes the NEXT pan instant — arrives during the
+   seconds the visitor spends looking at what just loaded.
+
+   Returned with fractional offsets rather than pixels, so the stage can be any
+   size CSS gives it. A tile is exactly one stage wide by construction. */
+function mapTiles(view, margin = 0) {
   const b = mapBbox(view);
-  const p = new URLSearchParams({
-    bbox: `${b.xmin},${b.ymin},${b.xmax},${b.ymax}`,
-    bboxSR: "3857", imageSR: "3857",
-    size: `${MAP_PX},${MAP_PX}`,
-    format: layer.format, f: "image",
-  });
-  if (layer.rule) p.set("renderingRule", JSON.stringify({ rasterFunction: layer.rule }));
-  return `${layer.url}?${p}`;
+  const s = b.s;
+  const tx0 = Math.floor((b.xmin + MERC) / s) - margin;
+  const tx1 = Math.floor((b.xmax + MERC) / s) + margin;
+  const ty0 = Math.floor((MERC - b.ymax) / s) - margin;
+  const ty1 = Math.floor((MERC - b.ymin) / s) + margin;
+  const n = 2 ** view.z;
+  const out = [];
+  for (let y = ty0; y <= ty1; y++) {
+    for (let x = tx0; x <= tx1; x++) {
+      if (x < 0 || y < 0 || x >= n || y >= n) continue;
+      out.push({
+        z: view.z, x, y,
+        key: `${view.z}/${x}/${y}`,
+        left: (-MERC + x * s - b.xmin) / s,
+        top:  (b.ymax - (MERC - y * s)) / s,
+      });
+    }
+  }
+  return out;
 }
 
-/* A click at (fx, fy) as a fraction of the image box -> coordinates. Fractions
-   rather than pixels so the caller can use the element's real size and the map
-   can be any width CSS gives it. */
+/* Where a tile from ANOTHER zoom sits in the current view, as fractions of the
+   stage. This is what keeps the previous level on screen while a new one loads:
+   on a zoom the old tiles are still perfectly good imagery of the same ground,
+   just at the wrong scale, so they are re-projected into the new geometry and
+   left underneath until the replacements arrive. The stage never goes beige. */
+function ghostPlacement(view, tile) {
+  const b = mapBbox(view);
+  const s = mercTile(tile.z);
+  return {
+    left: (-MERC + tile.x * s - b.xmin) / b.s,
+    top:  (b.ymax - (MERC - tile.y * s)) / b.s,
+    size: s / b.s,
+  };
+}
+
+const mapTileUrl = (tile, layerKey) =>
+  `/api/map-tile?z=${tile.z}&x=${tile.x}&y=${tile.y}&layer=${layerKey}`;
+
+/* A click at (fx, fy) as a fraction of the stage -> coordinates. */
 function mapPointAt(view, fx, fy) {
   const b = mapBbox(view);
   return from3857(b.xmin + fx * (b.xmax - b.xmin), b.ymax - fy * (b.ymax - b.ymin));
@@ -685,6 +777,24 @@ function mapFractionOf(view, lat, lon) {
   return [(x - b.xmin) / (b.xmax - b.xmin), (b.ymax - y) / (b.ymax - b.ymin)];
 }
 
+/* Recentre so that the ground currently under (fx, fy) stays under it after a
+   zoom. Without this, zooming toward a house walks it off screen and the
+   visitor re-pans after every step — which is most of what made the old map
+   feel like fighting it. Used by the wheel, the buttons and double-tap. */
+function zoomAbout(view, dz, fx = 0.5, fy = 0.5) {
+  const z = Math.max(MAP_Z_MIN, Math.min(MAP_Z_MAX, view.z + dz));
+  if (z === view.z) return view;
+  const [lat, lon] = mapPointAt(view, fx, fy);   // the ground under the cursor
+  const [ax, ay] = to3857(lon, lat);
+  const s = mercTile(z);
+  // Put that same ground back at the same fraction of the new, resized stage.
+  const cx = ax - (fx - 0.5) * s;
+  const cy = ay + (fy - 0.5) * s;
+  const [nlat, nlon] = from3857(cx, cy);
+  return { ...view, z, lat: nlat, lon: nlon };
+}
+
+
 /* Distance in FEET between two coordinates.
    Equirectangular, not haversine: over the few hundred feet that separate a
    house from its own planting beds the difference is millimetres, and the
@@ -694,6 +804,159 @@ function feetBetween(a, b) {
   const mLat = (b.lat - a.lat) * 111320;
   const mLon = (b.lon - a.lon) * 111320 * Math.cos((a.lat * Math.PI) / 180);
   return Math.hypot(mLat, mLon) / M_PER_FT;
+}
+
+/* ═══════════════ THE HOUSE IS A SHAPE, NOT A POINT ═══════════════
+
+   A single ⌂ pin answers "how far from the house?" with the distance to
+   whatever spot on the roof someone happened to tap, and that is wrong by the
+   width of the house. Measured against the real footprints of the ten
+   structures nearest the Vail test address, the distance from roof centre to
+   the actual wall runs:
+
+     5040 Main Gore Pl   570 m²    24–72 ft        4957 Juniper Ln  444 m²   9–54 ft
+     5026 Main Gore Dr N 233 m²    16–39 ft        5125 Black Bear  130 m²  13–27 ft
+
+   Two things follow, and both matter more than the raw error. The spread is
+   ANISOTROPIC — it depends entirely on which side of the house you are
+   standing — so it cannot be corrected with a constant. And SITE_RULES.zones
+   are 0–5, 5–30 and 30–100 ft, so HIZ 0 is smaller than the error bar: a point
+   pin cannot resolve it at all, and every house in that sample straddles the
+   30 ft boundary between HIZ 1–2 and HIZ 3. The pin was not imprecise, it was
+   measuring the wrong thing.
+
+   So `pins.house` carries a RING where one is available, and the distance is
+   measured to the nearest edge. Three shapes of answer, in descending order of
+   what they know:
+
+     footprint  a polygon from USA Structures, tapped
+     traced     a polygon the visitor drew
+     point      the old single pin, kept because coverage has holes
+
+   HOW GOOD IS THE FOOTPRINT? It is a ROOFLINE, not a foundation. ORNL extracts
+   these with a CNN over Maxar and NAIP imagery, so what it traces is the eave
+   line — call it one to three feet outside the foundation wall, more on the
+   deep overhangs mountain architecture likes. That is the CONSERVATIVE
+   direction for defensible space, and it is arguably the more correct envelope
+   anyway: HIZ 0 is a rule about what sits under the eaves. It is stated on
+   screen rather than presented as survey precision. */
+
+/* Distance in FEET from a point to a line segment, in local flat coordinates.
+   Longitude is scaled by cos(latitude) first so a degree east and a degree
+   north are the same size before any of the geometry runs; without that the
+   projection of the point onto the segment lands in the wrong place, and the
+   error grows with how east-west the wall runs. */
+function feetToSegment(p, a, b, lat0) {
+  const k = Math.cos((lat0 * Math.PI) / 180);
+  const px = p.lon * k, py = p.lat;
+  const ax = a[0] * k,  ay = a[1];
+  const bx = b[0] * k,  by = b[1];
+  const dx = bx - ax,   dy = by - ay;
+  const t = dx === 0 && dy === 0
+    ? 0
+    : Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)));
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy)) * 111320 / M_PER_FT;
+}
+
+/* Ray casting. A planting area INSIDE the footprint is a courtyard, a light
+   well, or — much more likely — a mis-tap, and either way the honest distance
+   is zero rather than the distance to the nearest wall from the inside. */
+function ringContains(ring, lat, lon) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i], [xj, yj] = ring[j];
+    if ((yi > lat) !== (yj > lat) && lon < ((xj - xi) * (lat - yi)) / (yj - yi) + xi) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+/* The one distance the panel actually uses. Returns null when there is nothing
+   to measure to, so every caller keeps the "still a question" branch that the
+   manual distance buttons live in. */
+function feetToHouse(house, plant) {
+  if (!house || !plant) return null;
+  if (house.kind === "point") return feetBetween(house, plant);
+  const ring = house.ring;
+  if (!ring || ring.length < 3) return null;
+  if (ringContains(ring, plant.lat, plant.lon)) return 0;
+  const lat0 = ring.reduce((t, p) => t + p[1], 0) / ring.length;
+  let best = Infinity;
+  for (let i = 0; i < ring.length; i++) {
+    const d = feetToSegment(plant, ring[i], ring[(i + 1) % ring.length], lat0);
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+/* A representative point for a house, for the "has the pin moved?" check and
+   for drawing the ⌂ glyph. The centroid of the ring, which is the one thing a
+   point is still good for. */
+function houseAnchor(house) {
+  if (!house) return null;
+  if (house.kind === "point") return { lat: house.lat, lon: house.lon };
+  const r = house.ring;
+  if (!r || !r.length) return null;
+  return {
+    lat: r.reduce((t, p) => t + p[1], 0) / r.length,
+    lon: r.reduce((t, p) => t + p[0], 0) / r.length,
+  };
+}
+
+/* ── building footprints ──
+   FEMA/ORNL USA Structures, queried straight from the browser: it answers in
+   about 0.2 s, it sends `access-control-allow-origin: *`, and it is the same
+   federal trust boundary the terrain read already crosses. No key, no proxy.
+
+   LICENCE: CC BY 4.0. Attribution is required and it is rendered under the map.
+   Worth being exact about, because `ingest.py` refuses CC-BY-NC photographs and
+   this is the neighbouring case: BY without NC is fine for a commercial site,
+   NC would not have been.
+
+   WHY THE VISITOR TAPS INSTEAD OF THE CODE MATCHING THE ADDRESS. The obvious
+   shortcut is to pick the building whose PROP_ADDR matches the geocode. At the
+   test address the geocode says 5027 MAIN GORE DR N and the three nearest
+   structures are all tagged 5027 MAIN GORE PLACE — a different street — at 77,
+   211 and 88 m². That is a house, a garage and a shed, and string matching
+   picks one of them at random. Tapping resolves the street disagreement and the
+   which-outbuilding question in the same gesture, and it is one tap. */
+const FOOTPRINTS =
+  "https://services2.arcgis.com/FiaPA4ga0iQKduv3/arcgis/rest/services/" +
+  "USA_Structures_View/FeatureServer/0/query";
+
+/* Below this the stage covers enough ground to return hundreds of buildings,
+   none of them big enough to tap. The overlay simply does not appear, and the
+   hint tells the visitor to zoom rather than leaving them tapping at nothing. */
+const FOOTPRINT_MIN_Z = 16;
+
+async function fetchFootprints(view, signal) {
+  const b = mapBbox(view);
+  /* Queried in 3857 and returned in 3857 — the same projection the tiles are
+     drawn in. Asking for 4326 back would mean reprojecting every vertex in the
+     browser to place it, which is arithmetic that can only introduce error
+     between a polygon and the imagery it has to sit on top of. */
+  const q = new URLSearchParams({
+    geometry: `${b.xmin},${b.ymin},${b.xmax},${b.ymax}`,
+    geometryType: "esriGeometryEnvelope",
+    inSR: "3857",
+    spatialRel: "esriSpatialRelIntersects",
+    outFields: "PROP_ADDR,OCC_CLS,SQMETERS",
+    returnGeometry: "true",
+    outSR: "4326",
+    f: "json",
+  });
+  const r = await fetch(`${FOOTPRINTS}?${q}`, { signal });
+  if (!r.ok) throw new Error(`footprints ${r.status}`);
+  const d = await r.json();
+  if (d.error) throw new Error(d.error.message || "footprint query failed");
+  return (d.features || []).map((f, i) => ({
+    id: `${f.attributes.PROP_ADDR || "?"}-${i}-${Math.round(f.attributes.SQMETERS || 0)}`,
+    ring: (f.geometry.rings || [[]])[0],
+    addr: f.attributes.PROP_ADDR || null,
+    occ: f.attributes.OCC_CLS || null,
+    sqm: f.attributes.SQMETERS || null,
+  })).filter(f => f.ring.length >= 3);
 }
 
 /* ═══════════════════════ SMALL PARTS ═══════════════════════ */
@@ -776,13 +1039,33 @@ export default function XericPlantDB() {
      `measuredAt` records the coordinates the current reading came from. Without
      it, moving the pin would silently leave numbers on screen that describe
      somewhere else — the panel compares the two and says so. */
-  const [mapView, setMapView]     = useState(null);   // {lat, lon, spanM}
+  const [mapView, setMapView]     = useState(null);   // {lat, lon, z}
   const [mapLayer, setMapLayer]   = useState("aerial");
   const [pins, setPins]           = useState({ plant:null, house:null });
   const [pinMode, setPinMode]     = useState("plant");
   const [useHousePin, setUseHousePin] = useState(false);
-  const mapImgRef = useRef(null);
-  const dragRef   = useRef(null);
+
+  /* How the house gets marked. "tap" is the good path — one tap on the real
+     footprint. "trace" is for the house the dataset does not have, and "point"
+     is the old single pin, kept because it is the only one that always works.
+     See feetToHouse: the mode decides what `pins.house` holds. */
+  const [houseMode, setHouseMode] = useState("tap");
+  const [footprints, setFootprints] = useState({ status:"idle", list:[] });
+  const [trace, setTrace]         = useState([]);   // ring under construction
+
+  /* The tile layer, not the image. Pans translate this element and commit one
+     state update on release — updating state per pointermove would re-render
+     the whole component, 104 plant cards included, on every frame of a drag. */
+  const mapLayerRef = useRef(null);
+  const stageRef    = useRef(null);
+  const dragRef     = useRef(null);
+  const pinchRef    = useRef(null);
+  const tapRef      = useRef(null);
+
+  /* The previous zoom's tiles, kept on screen and rescaled until the new level
+     has loaded. This is what replaced the beige square. */
+  const [ghost, setGhost] = useState(null);
+  const [loaded, setLoaded] = useState({});
   const [view, setView]           = useState("cards");
   const [sortBy, setSortBy]       = useState("common");
   const [sortDir, setSortDir]     = useState("asc");
@@ -805,8 +1088,7 @@ export default function XericPlantDB() {
   /* With both pins down the distance is measured rather than chosen, and the
      buttons stop being the source of truth. With one pin it is still a question
      no public dataset can answer, so the buttons remain. */
-  const pinDistFt = (useHousePin && pins.plant && pins.house)
-    ? feetBetween(pins.house, pins.plant) : null;
+  const pinDistFt = useHousePin ? feetToHouse(pins.house, pins.plant) : null;
   const effDistFt = pinDistFt == null ? siteDist : pinDistFt;
   const siteZone = zoneForDistance(effDistFt);
 
@@ -989,7 +1271,7 @@ export default function XericPlantDB() {
       /* Open the map on the geocode, with the planting pin already on it. The
          visitor refines from there rather than starting with an empty map and
          having to find their own house cold. */
-      setMapView({ lat: geo.lat, lon: geo.lon, spanM: MAP_SPAN_DEFAULT });
+      setMapView({ lat: geo.lat, lon: geo.lon, z: MAP_Z_DEFAULT });
       setPins({ plant: at, house: null });
       setPinMode("plant");
       setLookup({ status: "ok", data });
@@ -1036,67 +1318,279 @@ export default function XericPlantDB() {
     }
   };
 
-  /* ── map interaction ──
-     Panning moves the image with a CSS transform and commits ONE state update
-     on release. Updating state per pointermove would re-render the whole
-     component — including 104 plant cards — on every frame of a drag. */
+  /* ═══════════════════ MAP INTERACTION ═══════════════════
+
+     Everything here commits ONE state update, on release. Updating state per
+     pointermove would re-render the whole component — 104 plant cards
+     included — on every frame of a drag, which is the other half of why the
+     old map felt like wading. During the gesture only a CSS transform on the
+     tile layer moves, which the compositor handles without React at all.
+
+     The gestures are the ones a map is expected to have. The old map had drag
+     and two buttons, so a visitor who pinched got nothing, a visitor who
+     scrolled got the page, and a visitor who wanted to zoom toward their house
+     had to zoom, re-pan, zoom, re-pan. All three are fixed below, and the
+     re-pan one is fixed in zoomAbout: every zoom keeps the ground under the
+     cursor under the cursor. */
+
+  const stageBox = () => stageRef.current?.getBoundingClientRect();
+
+  /* The tile layer is what moves during a gesture. Committing the pan then
+     resets it to identity in the same paint the new view renders in. */
+  const setLayerTransform = t => {
+    const el = mapLayerRef.current;
+    if (el) el.style.transform = t;
+  };
+
   const mapPointerDown = e => {
     if (!mapView) return;
-    const el = mapImgRef.current;
+    const el = stageRef.current;
     if (!el) return;
-    /* Pointer capture keeps a drag tracking after the finger leaves the image.
+
+    /* Two fingers is a pinch, not two drags. Without this the second finger
+       starts its own pan and the map lurches between them. */
+    if (pinchRef.current) return;
+    if (dragRef.current && dragRef.current.id !== e.pointerId) {
+      const d = dragRef.current;
+      dragRef.current = null;
+      setLayerTransform("");
+      pinchRef.current = {
+        a: { id: d.id, x: d.lastX, y: d.lastY },
+        b: { id: e.pointerId, x: e.clientX, y: e.clientY },
+        d0: null,
+      };
+      const dx = e.clientX - d.lastX, dy = e.clientY - d.lastY;
+      pinchRef.current.d0 = Math.hypot(dx, dy) || 1;
+      return;
+    }
+
+    /* Pointer capture keeps a drag tracking after the finger leaves the stage.
        It THROWS NotFoundError when the id is not an active pointer — which `?.`
        does not protect against, since the method exists and the call fails.
        Capture is an enhancement: without it a drag that wanders off the element
        simply stops, which is a degradation and not a break. Never let it reach
        the console. */
     try { el.setPointerCapture?.(e.pointerId); } catch { /* not capturable */ }
-    dragRef.current = { x0:e.clientX, y0:e.clientY, dx:0, dy:0, moved:false };
+    dragRef.current = {
+      id: e.pointerId,
+      x0: e.clientX, y0: e.clientY,
+      lastX: e.clientX, lastY: e.clientY,
+      dx: 0, dy: 0, moved: false,
+    };
   };
 
   const mapPointerMove = e => {
-    const d = dragRef.current;
-    if (!d) return;
-    d.dx = e.clientX - d.x0;
-    d.dy = e.clientY - d.y0;
-    if (Math.abs(d.dx) > 3 || Math.abs(d.dy) > 3) d.moved = true;
-    const el = mapImgRef.current;
-    if (el) el.style.transform = `translate(${d.dx}px, ${d.dy}px)`;
-  };
-
-  const mapPointerUp = e => {
-    const d = dragRef.current;
-    dragRef.current = null;
-    const el = mapImgRef.current;
-    if (!el || !mapView) return;
-    el.style.transform = "";
-    const box = el.getBoundingClientRect();
-
-    if (d && d.moved) {
-      // A drag: shift the view by the same fraction of the box the image moved.
-      const b = mapBbox(mapView);
-      const [lat, lon] = from3857(
-        (b.xmin + b.xmax) / 2 - (d.dx / box.width) * (b.xmax - b.xmin),
-        (b.ymin + b.ymax) / 2 + (d.dy / box.height) * (b.ymax - b.ymin));
-      setMapView(v => ({ ...v, lat, lon }));
+    const pz = pinchRef.current;
+    if (pz) {
+      if (e.pointerId === pz.a.id) { pz.a.x = e.clientX; pz.a.y = e.clientY; }
+      else if (e.pointerId === pz.b.id) { pz.b.x = e.clientX; pz.b.y = e.clientY; }
+      else return;
+      const dist = Math.hypot(pz.a.x - pz.b.x, pz.a.y - pz.b.y) || 1;
+      /* Scale the tile layer live so the pinch tracks the fingers. The zoom
+         itself only commits on release, at whole levels — the grid has no
+         fractional levels to fetch, and pretending otherwise would mean a
+         render request per frame. */
+      pz.scale = dist / pz.d0;
+      const box = stageBox();
+      if (box) {
+        const mx = (pz.a.x + pz.b.x) / 2 - box.left;
+        const my = (pz.a.y + pz.b.y) / 2 - box.top;
+        setLayerTransform(
+          `translate(${mx}px, ${my}px) scale(${pz.scale}) translate(${-mx}px, ${-my}px)`);
+      }
       return;
     }
 
-    // A click: drop the active pin where they pressed.
+    const d = dragRef.current;
+    if (!d || d.id !== e.pointerId) return;
+    d.lastX = e.clientX; d.lastY = e.clientY;
+    d.dx = e.clientX - d.x0;
+    d.dy = e.clientY - d.y0;
+    if (Math.abs(d.dx) > 4 || Math.abs(d.dy) > 4) d.moved = true;
+    setLayerTransform(`translate(${d.dx}px, ${d.dy}px)`);
+  };
+
+  /* Shift the centre by the same fraction of the stage the layer moved. */
+  const panBy = (dxPx, dyPx, box) => setMapView(v => {
+    if (!v) return v;
+    const b = mapBbox(v);
+    const [lat, lon] = from3857(
+      (b.xmin + b.xmax) / 2 - (dxPx / box.width) * b.s,
+      (b.ymin + b.ymax) / 2 + (dyPx / box.height) * b.s);
+    return { ...v, lat, lon };
+  });
+
+  const mapPointerUp = e => {
+    const box = stageBox();
+
+    const pz = pinchRef.current;
+    if (pz && (e.pointerId === pz.a.id || e.pointerId === pz.b.id)) {
+      pinchRef.current = null;
+      setLayerTransform("");
+      if (box && pz.scale) {
+        /* A pinch past 1.5x is a level in, past 0.67x a level out. Anything
+           less was a wobble, and a map that changes level on a wobble is worse
+           than one that does not respond. */
+        const dz = pz.scale >= 1.5 ? 1 : pz.scale <= 0.67 ? -1 : 0;
+        if (dz) {
+          const mx = ((pz.a.x + pz.b.x) / 2 - box.left) / box.width;
+          const my = ((pz.a.y + pz.b.y) / 2 - box.top) / box.height;
+          zoomMap(dz, mx, my);
+        }
+      }
+      return;
+    }
+
+    const d = dragRef.current;
+    if (!d || d.id !== e.pointerId) return;
+    dragRef.current = null;
+    setLayerTransform("");
+    if (!box || !mapView) return;
+
+    if (d.moved) { panBy(d.dx, d.dy, box); return; }
+
     const fx = (e.clientX - box.left) / box.width;
     const fy = (e.clientY - box.top) / box.height;
     if (fx < 0 || fx > 1 || fy < 0 || fy > 1) return;
-    const [lat, lon] = mapPointAt(mapView, fx, fy);
-    setPins(pp => ({ ...pp, [pinMode]: { lat, lon } }));
+
+    /* DOUBLE-TAP TO ZOOM IN. Held in a ref rather than state so the first tap
+       of a pair does not re-render on its way to becoming a zoom. 320 ms and
+       24 px are the usual thresholds; wider on both would start eating
+       deliberate second pins. */
+    const now = e.timeStamp;
+    const prev = tapRef.current;
+    tapRef.current = { t: now, x: e.clientX, y: e.clientY };
+    if (prev && now - prev.t < 320 &&
+        Math.abs(e.clientX - prev.x) < 24 && Math.abs(e.clientY - prev.y) < 24) {
+      tapRef.current = null;
+      zoomMap(1, fx, fy);
+      return;
+    }
+
+    mapTapAt(fx, fy);
   };
 
-  const zoomMap = dir => setMapView(v => {
+  /* What a single tap MEANS depends on what is being marked. The planting pin
+     is a point and always was. The house is a shape, and the mode decides how
+     the visitor describes it — see feetToHouse. */
+  const mapTapAt = (fx, fy) => {
+    const [lat, lon] = mapPointAt(mapView, fx, fy);
+
+    if (pinMode === "plant") {
+      setPins(pp => ({ ...pp, plant: { lat, lon } }));
+      return;
+    }
+
+    if (houseMode === "trace") { setTrace(t => [...t, [lon, lat]]); return; }
+
+    if (houseMode === "tap") {
+      /* Smallest footprint containing the tap. Smallest, because a house and
+         its attached garage can both contain the point and the garage is the
+         more specific answer — and because overlapping polygons in the source
+         should resolve toward what was actually aimed at. */
+      const hit = footprints.list
+        .filter(f => ringContains(f.ring, lat, lon))
+        .sort((a, b) => (a.sqm || 0) - (b.sqm || 0))[0];
+      if (hit) {
+        setPins(pp => ({ ...pp, house: { kind:"footprint", ring: hit.ring,
+                                         addr: hit.addr, sqm: hit.sqm } }));
+      }
+      /* A tap on open ground in tap mode does nothing on purpose. Dropping a
+         point pin there would silently downgrade a measured envelope to the
+         thing this replaced, and the visitor would have no way to tell. */
+      return;
+    }
+
+    setPins(pp => ({ ...pp, house: { kind:"point", lat, lon } }));
+  };
+
+  /* ── zoom ──
+     zoomAbout keeps the ground under (fx, fy) under (fx, fy). The old buttons
+     zoomed about the centre, so zooming toward a house walked it off screen and
+     the visitor re-panned after every step. */
+  const zoomMap = (dir, fx = 0.5, fy = 0.5) => setMapView(v => {
     if (!v) return v;
-    const i = MAP_SPANS.indexOf(v.spanM);
-    const cur = i === -1 ? MAP_SPANS.indexOf(MAP_SPAN_DEFAULT) : i;
-    const next = Math.min(MAP_SPANS.length - 1, Math.max(0, cur + dir));
-    return { ...v, spanM: MAP_SPANS[next] };
+    const next = zoomAbout(v, dir, fx, fy);
+    if (next.z === v.z) return v;
+    /* Hand the level we are leaving to the ghost layer, so its tiles stay on
+       screen — rescaled into the new geometry — until the new ones decode.
+       This is what replaced the beige square. */
+    setGhost({ z: v.z, tiles: mapTiles(v, 1), layer: mapLayer });
+    return next;
   });
+
+  /* Wheel and trackpad. Bound through a ref with { passive: false } because
+     React's onWheel is passive: preventDefault inside it is ignored with a
+     console warning, and the page scrolls out from under the map instead. */
+  useEffect(() => {
+    const el = stageRef.current;
+    if (!el || !mapView) return undefined;
+    const onWheel = ev => {
+      ev.preventDefault();
+      const box = el.getBoundingClientRect();
+      const fx = (ev.clientX - box.left) / box.width;
+      const fy = (ev.clientY - box.top) / box.height;
+      zoomMap(ev.deltaY < 0 ? 1 : -1, fx, fy);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [mapView, mapLayer]);
+
+  /* Retire the ghost once the new level has actually painted. Keyed on the tile
+     set rather than a timer: a timer either drops the ghost before the tiles
+     arrive, which is the beige square again, or holds it long after, which
+     leaves a stale layer under a fresh one. */
+  const visibleTiles = useMemo(() => (mapView ? mapTiles(mapView, 0) : []), [mapView]);
+  const visibleReady = visibleTiles.length > 0 &&
+    visibleTiles.every(t => loaded[`${mapLayer}:${t.key}`]);
+
+  /* The margin ring joins the render only once the visible four have decoded.
+     Until then `currentTiles` IS the visible set, so nothing competes with it
+     for a connection. Already-cached tiles satisfy this immediately, so a
+     revisit or a zoom back out never waits. */
+  const currentTiles = useMemo(
+    () => (mapView ? mapTiles(mapView, visibleReady ? 1 : 0) : []),
+    [mapView, visibleReady]);
+
+  useEffect(() => {
+    if (!ghost || !visibleTiles.length) return;
+    /* Retire the ghost on the VISIBLE tiles, not on the ring — the ring is off
+       screen, and waiting for it would hold a stale layer under a finished one
+       for as long as the margin takes to arrive. */
+    if (visibleReady) setGhost(null);
+  }, [ghost, visibleTiles, visibleReady]);
+
+  /* ── footprints for the view ──
+     Refetched when the view moves, debounced, and abandoned when it moves
+     again — a pan that crosses three views should issue one query, not three,
+     and the two it cancelled must never land after the one it kept. */
+  useEffect(() => {
+    if (!mapView || !useHousePin || houseMode !== "tap") return undefined;
+    if (mapView.z < FOOTPRINT_MIN_Z) { setFootprints({ status:"zoom", list:[] }); return undefined; }
+    const ctl = new AbortController();
+    const t = setTimeout(() => {
+      setFootprints(f => ({ status:"loading", list:f.list }));
+      fetchFootprints(mapView, ctl.signal)
+        .then(list => setFootprints({ status:"ok", list }))
+        .catch(err => {
+          if (err.name === "AbortError") return;
+          /* A footprint layer that will not load is a house marked the old way,
+             not a broken panel. The mode buttons stay, and the hint says so. */
+          setFootprints({ status:"error", list:[] });
+        });
+    }, 250);
+    return () => { clearTimeout(t); ctl.abort(); };
+  }, [mapView, useHousePin, houseMode]);
+
+  /* Close the traced ring. Three points is the minimum that encloses anything;
+     below that there is no inside and feetToHouse would measure to a line. */
+  const closeTrace = () => {
+    if (trace.length < 3) return;
+    setPins(pp => ({ ...pp, house: { kind:"traced", ring: trace } }));
+    setTrace([]);
+  };
+
+  const clearHouse = () => { setPins(pp => ({ ...pp, house:null })); setTrace([]); };
 
   const SitePanel = () => {
     const band = bandForPct(siteSlopePct);
@@ -1254,45 +1748,144 @@ export default function XericPlantDB() {
                   <div className="xpdb-map-layers">
                     {Object.entries(MAP_LAYERS).map(([k, l]) => (
                       <button key={k} type="button" title={l.hint}
-                        onClick={() => setMapLayer(k)}
+                        /* Hold the outgoing layer underneath while the incoming
+                           one loads. Swapping src on the same <img> blanks it,
+                           so without this a layer switch is the beige square
+                           that the zoom fix just removed. */
+                        onClick={() => {
+                          if (k === mapLayer) return;
+                          setGhost({ z: mapView.z, tiles: mapTiles(mapView, 1), layer: mapLayer });
+                          setMapLayer(k);
+                        }}
                         className={mapLayer === k ? "on" : ""}>{l.label}</button>
                     ))}
                   </div>
                   <div className="xpdb-map-zoom">
                     <button type="button" onClick={() => zoomMap(-1)} aria-label="Zoom out"
-                      disabled={mapView.spanM === MAP_SPANS[0]}>−</button>
-                    <span>{mapView.spanM} m</span>
+                      disabled={mapView.z === MAP_Z_MIN}>−</button>
+                    {/* The GROUND span, cos-corrected out of the mercator grid.
+                        Quoting the projected figure would overstate what is on
+                        screen by about thirty percent at this latitude. */}
+                    <span>{Math.round(groundSpanM(mapView))} m</span>
                     <button type="button" onClick={() => zoomMap(1)} aria-label="Zoom in"
-                      disabled={mapView.spanM === MAP_SPANS[MAP_SPANS.length - 1]}>+</button>
+                      disabled={mapView.z === MAP_Z_MAX}>+</button>
                   </div>
                 </div>
 
-                <div className="xpdb-map-stage">
-                  {/* draggable=false: the browser's native image drag hijacks
-                      the pointer and the pan never starts. */}
-                  <img ref={mapImgRef} className="xpdb-map-img" draggable="false"
-                    alt={`${MAP_LAYERS[mapLayer].credit} centred on your site`}
-                    src={mapUrl(mapView, mapLayer)}
-                    onPointerDown={mapPointerDown}
-                    onPointerMove={mapPointerMove}
-                    onPointerUp={mapPointerUp}
-                    onPointerCancel={() => { dragRef.current = null; }} />
+                {/* touch-action:none is on the stage, so the browser hands us
+                    every pointer instead of scrolling the page. */}
+                <div className="xpdb-map-stage" ref={stageRef}
+                  onPointerDown={mapPointerDown}
+                  onPointerMove={mapPointerMove}
+                  onPointerUp={mapPointerUp}
+                  onPointerCancel={() => { dragRef.current = null; pinchRef.current = null;
+                                           setLayerTransform(""); }}>
 
-                  {["plant", "house"].map(kind => {
-                    const pin = pins[kind];
-                    if (!pin) return null;
-                    if (kind === "house" && !useHousePin) return null;
-                    const [fx, fy] = mapFractionOf(mapView, pin.lat, pin.lon);
+                  {/* THE GHOST. The level being left, rescaled into the new
+                      geometry and held underneath until the new tiles decode.
+                      Without it every zoom is a flash of the stage background,
+                      which is what fifteen seconds of beige used to be. */}
+                  {ghost && (
+                    <div className="xpdb-map-ghost" aria-hidden="true">
+                      {ghost.tiles.map(t => {
+                        const g = ghostPlacement(mapView, t);
+                        return (
+                          <img key={t.key} src={mapTileUrl(t, ghost.layer)} alt=""
+                            draggable="false" className="xpdb-tile"
+                            style={{ left:`${g.left * 100}%`, top:`${g.top * 100}%`,
+                                     width:`${g.size * 100}%`, height:`${g.size * 100}%` }} />
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* The tile layer. Keyed by z/x/y and NOT by position, which
+                      is what lets React keep the same <img> across a pan — the
+                      browser never re-decodes, and a pan inside the margin
+                      touches the network not at all. */}
+                  <div className="xpdb-map-tiles" ref={mapLayerRef}>
+                    {currentTiles.map(t => (
+                      <img key={t.key} className="xpdb-tile" draggable="false" alt=""
+                        src={mapTileUrl(t, mapLayer)}
+                        onLoad={() => setLoaded(l => ({ ...l, [`${mapLayer}:${t.key}`]: true }))}
+                        style={{ left:`${t.left * 100}%`, top:`${t.top * 100}%`,
+                                 width:"100%", height:"100%" }} />
+                    ))}
+                  </div>
+
+                  {/* ── the footprint overlay ──
+                      One SVG in the stage's own fractional coordinate space, so
+                      it pans and zooms with the tiles for free and needs no
+                      per-polygon repositioning. pointer-events stay off: the
+                      stage owns the gesture, and hit testing happens against the
+                      rings in mapTapAt, where "smallest containing polygon" is a
+                      rule rather than whatever the DOM stacked on top. */}
+                  {useHousePin && houseMode === "tap" && footprints.list.length > 0 && (
+                    <svg className="xpdb-map-fp" viewBox="0 0 1 1" preserveAspectRatio="none"
+                      aria-hidden="true">
+                      {footprints.list.map(f => {
+                        const pts = f.ring.map(([lon, lat]) => mapFractionOf(mapView, lat, lon));
+                        if (pts.every(([x, y]) => x < -0.2 || x > 1.2 || y < -0.2 || y > 1.2)) return null;
+                        const chosen = pins.house && pins.house.kind === "footprint" &&
+                          pins.house.ring === f.ring;
+                        return (
+                          <polygon key={f.id} className={chosen ? "chosen" : ""}
+                            points={pts.map(([x, y]) => `${x},${y}`).join(" ")} />
+                        );
+                      })}
+                    </svg>
+                  )}
+
+                  {/* The chosen or traced envelope, drawn over everything so it
+                      reads as the answer rather than as one more candidate. */}
+                  {useHousePin && pins.house && pins.house.ring && (
+                    <svg className="xpdb-map-house" viewBox="0 0 1 1" preserveAspectRatio="none"
+                      aria-hidden="true">
+                      <polygon points={pins.house.ring
+                        .map(([lon, lat]) => mapFractionOf(mapView, lat, lon))
+                        .map(([x, y]) => `${x},${y}`).join(" ")} />
+                    </svg>
+                  )}
+
+                  {/* A trace in progress: the vertices so far, and the line
+                      between them. Shown open, because it is open. */}
+                  {useHousePin && houseMode === "trace" && trace.length > 0 && (
+                    <svg className="xpdb-map-trace" viewBox="0 0 1 1" preserveAspectRatio="none"
+                      aria-hidden="true">
+                      <polyline points={trace
+                        .map(([lon, lat]) => mapFractionOf(mapView, lat, lon))
+                        .map(([x, y]) => `${x},${y}`).join(" ")} />
+                      {trace.map(([lon, lat], i) => {
+                        const [x, y] = mapFractionOf(mapView, lat, lon);
+                        return <circle key={i} cx={x} cy={y} r="0.008" />;
+                      })}
+                    </svg>
+                  )}
+
+                  {/* ── the pins ──
+                      The planting pin is a point. The house glyph marks the
+                      centroid of whatever shape was given, and is hidden when a
+                      ring is drawn — the outline already says where the house
+                      is, and better than a symbol in the middle of it can. */}
+                  {pins.plant && (() => {
+                    const [fx, fy] = mapFractionOf(mapView, pins.plant.lat, pins.plant.lon);
                     if (fx < 0 || fx > 1 || fy < 0 || fy > 1) return null;
                     return (
-                      <span key={kind}
-                        className={`xpdb-pin xpdb-pin-${kind}${pinMode === kind ? " active" : ""}`}
-                        style={{ left: `${fx * 100}%`, top: `${fy * 100}%` }}
-                        title={kind === "plant" ? "Where you are planting" : "The house"}>
-                        {kind === "plant" ? "✽" : "⌂"}
-                      </span>
+                      <span className={`xpdb-pin xpdb-pin-plant${pinMode === "plant" ? " active" : ""}`}
+                        style={{ left:`${fx * 100}%`, top:`${fy * 100}%` }}
+                        title="Where you are planting">✽</span>
                     );
-                  })}
+                  })()}
+                  {useHousePin && pins.house && !pins.house.ring && (() => {
+                    const a = houseAnchor(pins.house);
+                    const [fx, fy] = mapFractionOf(mapView, a.lat, a.lon);
+                    if (fx < 0 || fx > 1 || fy < 0 || fy > 1) return null;
+                    return (
+                      <span className={`xpdb-pin xpdb-pin-house${pinMode === "house" ? " active" : ""}`}
+                        style={{ left:`${fx * 100}%`, top:`${fy * 100}%` }}
+                        title="The house">⌂</span>
+                    );
+                  })()}
                 </div>
 
                 <div className="xpdb-map-controls">
@@ -1309,16 +1902,101 @@ export default function XericPlantDB() {
                       onChange={e => {
                         setUseHousePin(e.target.checked);
                         setPinMode(e.target.checked ? "house" : "plant");
-                        if (!e.target.checked) setPins(pp => ({ ...pp, house:null }));
+                        if (!e.target.checked) clearHouse();
                       }} />
                     <span>Also mark the house</span>
                   </label>
                 </div>
 
+                {/* ── how the house gets marked ──
+                    Only while the house is the active mark. Three ways, and the
+                    order is the order of what they know: a real footprint, a
+                    drawn one, a bare point. */}
+                {useHousePin && pinMode === "house" && (
+                  <div className="xpdb-house-modes">
+                    <div className="xpdb-map-which">
+                      {[["tap", "Tap the building"], ["trace", "Trace it"], ["point", "Just a pin"]]
+                        .map(([k, label]) => (
+                          <button key={k} type="button"
+                            onClick={() => { setHouseMode(k); setTrace([]); }}
+                            className={houseMode === k ? "on" : ""}>{label}</button>
+                        ))}
+                    </div>
+
+                    {houseMode === "tap" && (
+                      <p className="xpdb-map-tip">
+                        {footprints.status === "zoom"
+                          ? <>Zoom in to load building outlines.</>
+                          : footprints.status === "loading" && !footprints.list.length
+                          ? <>Loading building outlines…</>
+                          : footprints.status === "error"
+                          ? <>Building outlines are unavailable right now — trace the
+                             house or drop a pin instead.</>
+                          : footprints.list.length
+                          ? <>Tap your house. The distance is then measured to its
+                             nearest wall, not to a point in the middle of it.</>
+                          : <>No mapped buildings here. USA Structures covers
+                             structures over 450 sq ft and does miss some — trace
+                             the house or drop a pin instead.</>}
+                      </p>
+                    )}
+
+                    {houseMode === "trace" && (
+                      <div className="xpdb-trace-controls">
+                        <p className="xpdb-map-tip">
+                          Tap each corner of the house, then close the shape.
+                          {trace.length > 0 && <> {trace.length} corner{trace.length === 1 ? "" : "s"} so far.</>}
+                        </p>
+                        <button type="button" onClick={closeTrace} disabled={trace.length < 3}>
+                          Close the shape
+                        </button>
+                        <button type="button" onClick={() => setTrace(t => t.slice(0, -1))}
+                          disabled={!trace.length}>Undo corner</button>
+                      </div>
+                    )}
+
+                    {houseMode === "point" && (
+                      <p className="xpdb-map-tip">
+                        Tap the middle of the house. This measures to that point, so
+                        it reads long by roughly half the width of the building —
+                        <b> 13 to 72 ft</b> on the houses around the test address.
+                        Prefer tapping the outline where there is one.
+                      </p>
+                    )}
+
+                    {pins.house && (
+                      <p className="xpdb-house-said">
+                        {pins.house.kind === "footprint"
+                          ? <>Measuring to the mapped outline
+                              {pins.house.addr ? <> of {pins.house.addr.toLowerCase()}</> : null}
+                              {pins.house.sqm ? <> ({Math.round(pins.house.sqm)} m²)</> : null}.
+                              That outline is a <b>roofline</b> traced from aerial
+                              imagery, so it follows the eaves — a foot or three
+                              outside the foundation, which is the safe direction
+                              for a defensible-space band.</>
+                          : pins.house.kind === "traced"
+                          ? <>Measuring to the outline you drew, {pins.house.ring.length} corners.</>
+                          : <>Measuring to a single point.</>}
+                        {" "}
+                        <button type="button" className="xpdb-linkish" onClick={clearHouse}>
+                          Clear
+                        </button>
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 <p className="xpdb-map-tip">
-                  Drag to pan, tap to place the{" "}
-                  <b>{pinMode === "plant" ? "planting" : "house"}</b> pin.{" "}
+                  Drag to pan. Scroll, pinch or double-tap to zoom — the point
+                  under the cursor stays put.{" "}
+                  {pinMode === "plant"
+                    ? <>Tap to place the <b>planting</b> pin.</>
+                    : <>Tap to mark the <b>house</b>.</>}{" "}
                   {MAP_LAYERS[mapLayer].credit}
+                  {/* CC BY 4.0 requires the credit, and it only appears while
+                      the layer it describes is actually on screen. */}
+                  {useHousePin && houseMode === "tap" && footprints.list.length > 0
+                    && <>, building outlines FEMA/ORNL USA Structures (CC BY 4.0)</>}
                   {/* Only the aerial has a survey date worth stating. The
                       hillshade is terrain, and terrain does not go out of date
                       the way a roofline does. */}
@@ -1331,13 +2009,21 @@ export default function XericPlantDB() {
                     band stops being a question. */}
                 {useHousePin && pinDistFt != null && (
                   <p className="xpdb-map-dist">
-                    <b>{Math.round(pinDistFt)} ft</b> from the house — {siteZone.name}
+                    <b>{Math.round(pinDistFt)} ft</b>{" "}
+                    {pins.house && pins.house.ring
+                      ? <>from the nearest wall</>
+                      : <>from the house pin</>} — {siteZone.name}
                     {siteZone.minIgn != null && <>, ignitability {siteZone.minIgn}+ only</>}.
+                    {/* The band edge is the whole point of measuring to the
+                        wall rather than to the middle: HIZ 0 is five feet wide
+                        and a centre-of-roof pin cannot resolve it at all. */}
+                    {pinDistFt === 0 && <> That is inside the outline — move the
+                      planting pin outside the house.</>}
                   </p>
                 )}
                 {useHousePin && pinDistFt == null && (
                   <p className="xpdb-map-tip">
-                    Place the house pin too and the distance is measured instead of asked.
+                    Mark the house too and the distance is measured instead of asked.
                   </p>
                 )}
 
@@ -1979,13 +2665,70 @@ export default function XericPlantDB() {
           overflow: hidden; border: 1px solid ${C.border}; background: #ded7c6;
           touch-action: none;   /* or the browser pans the page instead of the map */
           cursor: crosshair;
+          /* The stage, not the image, now receives every pointer event: it is
+             the one element that stays put while the tile layer inside it is
+             being translated mid-drag. */
         }
-        .xpdb-map-img {
-          width: 100%; height: 100%; display: block;
+        /* ── the tile layer ──
+           Tiles are absolutely positioned at fractional offsets and are each
+           exactly one stage wide, so the layer can be translated as a unit
+           during a pan and the compositor does the work. will-change keeps it
+           on its own layer so a drag never repaints the pins or the overlays. */
+        .xpdb-map-tiles, .xpdb-map-ghost {
+          position: absolute; inset: 0;
+          will-change: transform;
+        }
+        .xpdb-map-ghost { z-index: 0; }
+        .xpdb-map-tiles { z-index: 1; }
+        .xpdb-tile {
+          position: absolute; display: block;
           user-select: none; -webkit-user-drag: none;
+          /* A hairline of the stage background shows between tiles at
+             fractional device-pixel offsets otherwise, and a grid of seams
+             across aerial photography reads as a rendering fault. */
+          outline: 0.5px solid transparent;
+        }
+
+        /* ── overlays ──
+           All three share the stage's fractional coordinate space via a 0..1
+           viewBox, so they pan and zoom with the tiles without any per-shape
+           arithmetic. non-scaling-stroke keeps the outlines one weight at every
+           zoom; without it a stroke in a 0..1 space renders invisibly thin. */
+        .xpdb-map-fp, .xpdb-map-house, .xpdb-map-trace {
+          position: absolute; inset: 0; z-index: 2;
+          pointer-events: none; overflow: visible;
+        }
+        .xpdb-map-fp polygon {
+          fill: ${C.accent}22; stroke: ${C.accent}; stroke-width: 1.5px;
+          vector-effect: non-scaling-stroke;
+        }
+        .xpdb-map-fp polygon.chosen { fill: transparent; stroke: transparent; }
+        .xpdb-map-house polygon {
+          fill: ${C.accent}44; stroke: ${C.accent}; stroke-width: 2.5px;
+          vector-effect: non-scaling-stroke;
+          paint-order: stroke;
+        }
+        .xpdb-map-trace polyline {
+          fill: none; stroke: ${C.accent}; stroke-width: 2px;
+          stroke-dasharray: 5 4; vector-effect: non-scaling-stroke;
+        }
+        .xpdb-map-trace circle { fill: ${C.accent}; }
+
+        /* ── marking the house ── */
+        .xpdb-house-modes { margin-top: 6px; }
+        .xpdb-trace-controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+        .xpdb-trace-controls button {
+          font: inherit; font-size: 12px; padding: 3px 9px; cursor: pointer;
+          border: 1px solid ${C.border}; background: ${C.card}; color: ${C.text};
+          border-radius: 3px;
+        }
+        .xpdb-trace-controls button:disabled { opacity: 0.45; cursor: default; }
+        .xpdb-house-said {
+          font-size: 12px; line-height: 1.5; margin: 6px 0 0;
+          color: ${C.muted}; border-left: 2px solid ${C.accent}; padding-left: 8px;
         }
         .xpdb-pin {
-          position: absolute; transform: translate(-50%, -50%);
+          position: absolute; transform: translate(-50%, -50%); z-index: 3;
           font-size: 1.05rem; line-height: 1; pointer-events: none;
           text-shadow: 0 0 3px #fff, 0 0 6px #fff, 0 0 2px #fff;
         }

@@ -30,10 +30,16 @@
  *   - the response carries `Cache-Control: no-store`, so neither Cloudflare's
  *     cache nor the browser's keeps a copy;
  *   - the terrain half of the lookup happens in the browser against USGS, and
- *     it is given ROUNDED COORDINATES ONLY. USGS never sees the address.
+ *     it is given ROUNDED COORDINATES ONLY. USGS never sees the address;
+ *   - a successful geocode kicks off a map-tile pre-warm (see map-tile.js),
+ *     which likewise carries ROUNDED COORDINATES ONLY, quantised further onto
+ *     a 471 m and a 235 m tile grid. It starts after this response has been
+ *     sent, it cannot delay or fail the lookup, and no address travels with it.
  *
  * Do not add logging here "temporarily". There is no temporary in a request log.
  */
+
+import { warmTiles } from './map-tile.js';
 
 const CENSUS =
   'https://geocoding.geo.census.gov/geocoder/locations/onelineaddress';
@@ -77,7 +83,7 @@ async function timed(url, ms) {
   }
 }
 
-async function lookup(request) {
+async function lookup(request, ctx) {
   const address = (new URL(request.url).searchParams.get('address') || '').trim();
 
   if (!address) return json({ error: 'no-address', message: 'Enter an address.' }, 400);
@@ -160,9 +166,29 @@ async function lookup(request) {
     }
   }
 
+  const lat = Math.round(c.y * 1e6) / 1e6;
+  const lon = Math.round(c.x * 1e6) / 1e6;
+
+  // START THE MAP RENDERING NOW, not when the visitor scrolls to it.
+  // A cold USGS imagery tile takes 8–22 seconds and nothing makes that fast —
+  // the only lever is to spend it while the visitor is reading the elevation
+  // and aspect this response just handed them. waitUntil runs it AFTER the
+  // response goes, so it costs the lookup nothing, and the map works normally
+  // whether or not it finishes. Rounded coordinates only, and no address: what
+  // this starts is a fetch for squares of public aerial photography at the two
+  // zoom levels the visitor is about to use.
+  if (ctx && typeof ctx.waitUntil === 'function') {
+    try {
+      ctx.waitUntil(warmTiles(new URL(request.url).origin, lat, lon));
+    } catch {
+      // A pre-warm that will not start is a map that loads at its old speed.
+      // It is never a failed lookup.
+    }
+  }
+
   return json({
-    lat: Math.round(c.y * 1e6) / 1e6,
-    lon: Math.round(c.x * 1e6) / 1e6,
+    lat,
+    lon,
     matchedAddress: m.matchedAddress || null,
     ambiguous: matches.length > 1 ? matches.length : 0,
     precision,
@@ -181,7 +207,7 @@ async function lookup(request) {
 // one upstream geocode for no payload — but rejecting it means `curl -I` answers
 // 405 on an endpoint that plainly works, which reads as a broken route to anyone
 // checking it and to any uptime monitor pointed at it.
-export const handleSiteLookup = async (request) =>
+export const handleSiteLookup = async (request, ctx) =>
   request.method === 'GET' || request.method === 'HEAD'
-    ? lookup(request)
+    ? lookup(request, ctx)
     : new Response('Method Not Allowed', { status: 405, headers: { Allow: 'GET, HEAD' } });

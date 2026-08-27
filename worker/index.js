@@ -24,13 +24,22 @@
  */
 
 import { handleSiteLookup } from './site-lookup.js';
+import { handleMapTile } from './map-tile.js';
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const { pathname } = new URL(request.url);
 
+    // `ctx` reaches the lookup so it can pre-warm map tiles with waitUntil
+    // after the response has gone. See warmTiles() in map-tile.js.
     if (pathname === '/api/site-lookup') {
-      return handleSiteLookup(request);
+      return handleSiteLookup(request, ctx);
+    }
+
+    // Imagery for the pin map, addressed by integer z/x/y so the edge cache can
+    // actually hit. map-tile.js explains why that is the whole fix.
+    if (pathname === '/api/map-tile') {
+      return handleMapTile(request);
     }
 
     // Not an asset and not a route: hand it back to the asset server, which

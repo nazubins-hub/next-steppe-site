@@ -68,22 +68,17 @@ const csp = [
   // allowance unnecessary; see the connect-src note below, which is its other half.
   `script-src ${scriptSrc} https://static.cloudflareinsights.com`,
   "style-src 'self' 'unsafe-inline'",
-  // The site panel's pin map. Both are keyless federal imagery services that
-  // take a bbox and return a PNG — a static-map API, so this is one <img> per
-  // view rather than a grid of tiles from a CDN, and no mapping library.
+  // NO IMAGERY HOSTS HERE ANY MORE, and that is a narrowing, not an oversight.
+  // The pin map used to load one <img> per view straight from USGS. It now loads
+  // tiles from /api/map-tile on this origin — which is 'self' — because a bbox
+  // built from wherever a drag stopped could never hit USGS's CDN, and quantised
+  // tiles behind our own Worker cache can. See worker/map-tile.js.
   //
-  //   imagery.nationalmap.gov    USGS NAIP Plus orthoimagery: how a visitor finds
-  //                              their own roof. Replaced basemap.nationalmap.gov,
-  //                              which served a coarser cache level than it
-  //                              accepted requests for — see MAP_LAYERS.
-  //   elevation.nationalmap.gov  3DEP hillshade: how they see which way the
-  //                              ground falls. Already in connect-src for the
-  //                              terrain read — img-src is a SEPARATE directive
-  //                              and does not inherit it.
-  //
-  // These see coordinates, never the address: the geocode goes through
-  // /api/site-lookup on this origin. Same boundary the terrain read crosses.
-  "img-src 'self' data: https://imagery.nationalmap.gov https://elevation.nationalmap.gov",
+  // Both USGS hosts remain in connect-src below, for fetch() calls that survive:
+  // the terrain read, and the imagery survey year. An <img> and a fetch() are
+  // governed by SEPARATE directives, so removing a host from one says nothing
+  // about the other — that split is the whole reason this comment exists.
+  "img-src 'self' data:",
   "font-src 'self'",
   // Two separate consumers here, each needing a different host:
   //
@@ -107,13 +102,22 @@ const csp = [
   //                          deliberate and this comment is where it is recorded —
   //                          adding a geocoding host to this line would undo it.
   //
-  //   imagery.nationalmap  in connect-src as well as img-src, and for a different
-  //     .gov               reason: the map IMAGE is an <img> (img-src), but the
-  //                        imagery survey year is read with fetch() against the
-  //                        same ImageServer's identify endpoint, and fetch is
-  //                        governed by connect-src. Dropping either one breaks a
-  //                        different half of the same feature.
-  "connect-src 'self' https://formspree.io https://cloudflareinsights.com https://elevation.nationalmap.gov https://imagery.nationalmap.gov",
+  //   imagery.nationalmap  the imagery survey year, read with fetch() against the
+  //     .gov               NAIP ImageServer's identify endpoint. The map PICTURE
+  //                        no longer comes from here — it comes from
+  //                        /api/map-tile — but this fetch does, and fetch is
+  //                        governed by connect-src. It was previously in img-src
+  //                        too; that half is gone and this half must not follow.
+  //
+  //   services2.arcgis.com FEMA/ORNL USA Structures: the building footprints the
+  //                        visitor taps to mark their house. It answers in about
+  //                        0.2 s with `access-control-allow-origin: *`, so the
+  //                        browser reads it directly and no proxy is involved.
+  //                        CC BY 4.0 — attribution is rendered under the map, and
+  //                        the licence is BY without NC, which is why it may be
+  //                        used here at all when ingest.py refuses CC-BY-NC.
+  //                        It is given a BBOX, never the address.
+  "connect-src 'self' https://formspree.io https://cloudflareinsights.com https://elevation.nationalmap.gov https://imagery.nationalmap.gov https://services2.arcgis.com",
   'form-action https://formspree.io',
   "frame-ancestors 'none'",
   "base-uri 'none'",
