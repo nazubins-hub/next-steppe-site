@@ -39,7 +39,9 @@ export default {
     // Imagery for the pin map, addressed by integer z/x/y so the edge cache can
     // actually hit. map-tile.js explains why that is the whole fix.
     if (pathname === '/api/map-tile') {
-      return handleMapTile(request);
+      // `ctx` so a render that outruns the visitor's patience is still finished
+      // and cached in the background rather than thrown away. See map-tile.js.
+      return handleMapTile(request, ctx);
     }
 
     // Not an asset and not a route: hand it back to the asset server, which

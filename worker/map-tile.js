@@ -133,20 +133,41 @@ const plainError = (msg, status) =>
     headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' },
   });
 
-/* Bounded, and generously. A cold render measured 8–22 s upstream, so a timeout
-   tuned to a normal fetch would abort exactly the requests this route exists to
-   absorb — and abort them AFTER paying for them, having cached nothing. */
-async function fetchTile(z, x, y, layer) {
-  const ctl = new AbortController();
-  const t = setTimeout(() => ctl.abort(), 30000);
-  try {
-    return await fetch(upstreamUrl(z, x, y, layer), { signal: ctl.signal });
-  } finally {
-    clearTimeout(t);
-  }
+/* How long a visitor is made to wait before we give up on them. NOT how long
+   the render is given — see salvage below, which is the point of the split. */
+const WAIT_MS = 25000;
+
+/* NEVER ABORT THE UPSTREAM. Observed in production: a cold z17 tile over Denver
+   took 30.1 s, hit an AbortController, returned 504 and cached NOTHING — so the
+   retry started the same render from zero and paid another 20 s. The render was
+   done, or nearly; aborting threw it away and billed the next visitor for it.
+
+   So the fetch is raced against a timer rather than cancelled by one. If the
+   timer wins the visitor gets a 504 they can retry, and the fetch is handed to
+   waitUntil to finish and populate the cache in the background — by the time
+   they retry, or the next person arrives, it is a hit. Slow renders are exactly
+   the ones worth keeping; they are the expensive ones. */
+function fetchTile(z, x, y, layer) {
+  return fetch(upstreamUrl(z, x, y, layer));
 }
 
-export async function handleMapTile(request) {
+/* Store a finished upstream response under the tile's key. Shared by the fast
+   path and the salvage path so they cannot drift on status handling or headers,
+   which is the kind of thing that silently caches a 502 for a week. */
+async function store(cache, key, res) {
+  if (!res.ok) return null;
+  const out = new Response(await res.arrayBuffer(), {
+    headers: {
+      'Content-Type': 'image/jpeg',
+      'Cache-Control': `public, max-age=${TTL}, immutable`,
+      'X-Content-Type-Options': 'nosniff',
+    },
+  });
+  await cache.put(key, out.clone());
+  return out;
+}
+
+export async function handleMapTile(request, ctx) {
   if (request.method !== 'GET' && request.method !== 'HEAD') {
     return new Response('Method Not Allowed', { status: 405, headers: { Allow: 'GET, HEAD' } });
   }
@@ -173,27 +194,41 @@ export async function handleMapTile(request) {
   const hit = await cache.match(key);
   if (hit) return hit;
 
+  const pending = fetchTile(z, x, y, layer);
+
+  /* A sentinel object rather than a rejection: a timeout is an ordinary
+     outcome here, not an error, and racing against a rejection would make the
+     salvage path look like a failure to the catch below. */
+  const TIMED_OUT = Symbol('timeout');
+  let timer;
+  const deadline = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(TIMED_OUT), WAIT_MS);
+  });
+
   let res;
   try {
-    res = await fetchTile(z, x, y, layer);
+    res = await Promise.race([pending, deadline]);
   } catch {
     return plainError('Imagery upstream did not answer.', 504);
+  } finally {
+    clearTimeout(timer);
   }
+
+  if (res === TIMED_OUT) {
+    // Let the render finish on its own time and land in the cache. The visitor
+    // is told to retry; whoever asks next — very likely them — gets a hit.
+    if (ctx && typeof ctx.waitUntil === 'function') {
+      ctx.waitUntil(pending.then((r) => store(cache, key, r)).catch(() => {}));
+    }
+    return plainError('Imagery is still rendering upstream — try again shortly.', 504);
+  }
+
   // Upstream failures are NOT cached. A 502 stored for a week would blank a
   // tile long after the service came back, and the visitor has no way to
   // invalidate it.
   if (!res.ok) return plainError(`Imagery upstream returned ${res.status}.`, 502);
 
-  const body = await res.arrayBuffer();
-  const out = new Response(body, {
-    headers: {
-      'Content-Type': 'image/jpeg',
-      'Cache-Control': `public, max-age=${TTL}, immutable`,
-      'X-Content-Type-Options': 'nosniff',
-    },
-  });
-  await cache.put(key, out.clone());
-  return out;
+  return (await store(cache, key, res)) || plainError('Imagery upstream returned no image.', 502);
 }
 
 /* ── pre-warm ──
