@@ -1061,6 +1061,12 @@ export default function XericPlantDB() {
   const dragRef     = useRef(null);
   const pinchRef    = useRef(null);
   const tapRef      = useRef(null);
+  const wheelRef    = useRef({ acc: 0, t: 0, until: 0 });
+
+  /* The committed view, readable synchronously. Assigned during render so it is
+     never a frame behind the state it mirrors. */
+  const mapViewRef  = useRef(null);
+  mapViewRef.current = mapView;
 
   /* The previous zoom's tiles, kept on screen and rescaled until the new level
      has loaded. This is what replaced the beige square. */
@@ -1410,15 +1416,20 @@ export default function XericPlantDB() {
     setLayerTransform(`translate(${d.dx}px, ${d.dy}px)`);
   };
 
-  /* Shift the centre by the same fraction of the stage the layer moved. */
-  const panBy = (dxPx, dyPx, box) => setMapView(v => {
-    if (!v) return v;
+  /* Shift the centre by the same fraction of the stage the layer moved.
+     Through the same ref as zoomMap, so a zoom that follows a pan before React
+     has re-rendered still measures from where the pan actually left the map. */
+  const panBy = (dxPx, dyPx, box) => {
+    const v = mapViewRef.current;
+    if (!v) return;
     const b = mapBbox(v);
     const [lat, lon] = from3857(
       (b.xmin + b.xmax) / 2 - (dxPx / box.width) * b.s,
       (b.ymin + b.ymax) / 2 + (dyPx / box.height) * b.s);
-    return { ...v, lat, lon };
-  });
+    const next = { ...v, lat, lon };
+    mapViewRef.current = next;
+    setMapView(next);
+  };
 
   const mapPointerUp = e => {
     const box = stageBox();
@@ -1508,29 +1519,72 @@ export default function XericPlantDB() {
      zoomAbout keeps the ground under (fx, fy) under (fx, fy). The old buttons
      zoomed about the centre, so zooming toward a house walked it off screen and
      the visitor re-panned after every step. */
-  const zoomMap = (dir, fx = 0.5, fy = 0.5) => setMapView(v => {
-    if (!v) return v;
+  const zoomMap = (dir, fx = 0.5, fy = 0.5) => {
+    /* Read through the ref, not through `mapView`. Two zoom calls can land in
+       one tick — a wheel burst, a pinch ending on a double-tap — and the second
+       would otherwise compute from the state the first has not committed yet,
+       zooming twice from the same starting level and skipping one. */
+    const v = mapViewRef.current;
+    if (!v) return;
     const next = zoomAbout(v, dir, fx, fy);
-    if (next.z === v.z) return v;
+    if (next.z === v.z) return;
     /* Hand the level we are leaving to the ghost layer, so its tiles stay on
        screen — rescaled into the new geometry — until the new ones decode.
-       This is what replaced the beige square. */
-    setGhost({ z: v.z, tiles: mapTiles(v, 1), layer: mapLayer });
-    return next;
-  });
+       This is what replaced the beige square.
 
-  /* Wheel and trackpad. Bound through a ref with { passive: false } because
-     React's onWheel is passive: preventDefault inside it is ignored with a
-     console warning, and the page scrolls out from under the map instead. */
+       Called HERE and not inside a setMapView updater. React may invoke an
+       updater more than once for a single update, and a setState inside one is
+       a side effect that then happens more than once. */
+    setGhost({ z: v.z, tiles: mapTiles(v, 1), layer: mapLayer });
+    mapViewRef.current = next;
+    setMapView(next);
+  };
+
+  /* ── wheel and trackpad ──
+     ONE GESTURE IS ONE LEVEL. A wheel event is not a zoom step: a mouse notch
+     arrives as a single event of about 100-120 px, but a trackpad flick arrives
+     as twenty or more small ones, and momentum keeps them coming after the
+     fingers have lifted. Stepping per event meant a single flick ran the map
+     from 471 m to the 1884 m floor in one go — measured, 18 events — and
+     recentred on the cursor at every step on the way, which is what "skipping
+     around and reverting to zoomed out" was.
+
+     So delta is accumulated toward a threshold, and after a step there is a
+     short cooldown that also drops the accumulator. The cooldown is what eats a
+     momentum tail; the threshold is what makes one mouse notch still mean one
+     level. Both live in a ref so that re-registering the listener — which
+     happens on every view change — does not reset a gesture midway.
+
+     Bound through a ref with { passive: false } because React's onWheel is
+     passive: preventDefault inside it is ignored with a console warning, and
+     the page scrolls out from under the map instead. */
   useEffect(() => {
     const el = stageRef.current;
     if (!el || !mapView) return undefined;
     const onWheel = ev => {
       ev.preventDefault();
+      const w = wheelRef.current;
+      const now = ev.timeStamp;
+
+      /* deltaMode is not always pixels: Firefox reports lines for a mouse
+         wheel and pages for some configurations. Normalising here is what
+         keeps the threshold meaning the same thing across browsers. */
+      const d = ev.deltaY * (ev.deltaMode === 1 ? 16 : ev.deltaMode === 2 ? 100 : 1);
+
+      // A new gesture: a pause, or a reversal, starts the accumulator over.
+      if (now - w.t > 400 || (w.acc !== 0 && Math.sign(d) !== Math.sign(w.acc))) w.acc = 0;
+      w.t = now;
+
+      if (now < w.until) return;          // still cooling down from the last step
+      w.acc += d;
+      if (Math.abs(w.acc) < 100) return;  // about one mouse notch
+
+      w.acc = 0;
+      w.until = now + 250;
       const box = el.getBoundingClientRect();
-      const fx = (ev.clientX - box.left) / box.width;
-      const fy = (ev.clientY - box.top) / box.height;
-      zoomMap(ev.deltaY < 0 ? 1 : -1, fx, fy);
+      zoomMap(d < 0 ? 1 : -1,
+        (ev.clientX - box.left) / box.width,
+        (ev.clientY - box.top) / box.height);
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
