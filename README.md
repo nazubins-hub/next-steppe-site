@@ -27,6 +27,11 @@ runtime production uses — so the address lookup, the pin map and the `_headers
 CSP all behave as they will live. It rebuilds on every start, so it is slower;
 reach for it when you touch the lookup, the map, the Worker or the CSP.
 
+The map's Esri layer needs the ArcGIS key locally too: put it in `.dev.vars`,
+beside `wrangler.jsonc`, as `ARCGIS_API_KEY=…`. That file is git-ignored.
+Without it the Worker answers the Esri layer with 503 and the map opens on the
+2019 aerial — which is also how to check that fallback.
+
 ## The plant database
 
 The 100-species database is **not authored here**. It lives in its own repo
@@ -129,13 +134,23 @@ panel reports how far the pin has moved from the last reading, because 300 m of
 pin movement swings effective elevation by ~695 ft at that address — this is a
 high-leverage control and it says so rather than hiding it.
 
-A second pin is optional: mark the house as well and the defensible-space
-distance is measured instead of asked, and the distance buttons stand down. One
-pin is the common case and works alone.
+The house is optional: mark it — tap its USA Structures outline, trace it, or
+drop a pin — and the defensible-space distance is measured instead of asked,
+and the distance buttons stand down. Beds can be traced too, as many as the
+property has. The selected bed tunes the list from its nearest edge to the
+house, its terrain is read over the bed itself, and each carries a note and the
+light as the visitor sees it. The outlines export as GeoJSON (what the plant
+system's `geometry.py read` takes) or KML (for Google Earth), built in the
+browser and sent nowhere. One pin is still the common case and works alone.
 
-Imagery is USGS **NAIP Plus** orthoimagery (find your roof) and 3DEP hillshade
-(see which way the ground falls). Both keyless, both a bbox-to-image call — no
-mapping library, no tile CDN, one request per view.
+Imagery is **Esri World Imagery** by default — Vantor, 31–34 cm over the valley,
+captured 2023–2025 — with USGS **NAIP Plus** as the "2019 aerial" and the 3DEP
+hillshade beside it (see which way the ground falls). Every tile comes through
+`/api/map-tile` on this origin as an integer z/x/y, so there is no mapping
+library and `img-src` names no imagery host. The USGS layers are cached at our
+edge for a week; the Esri layer is fetched with the Worker's ArcGIS key and
+cached only in the visitor's browser — `worker/map-tile.js` says why. Without
+the key the map opens on the 2019 aerial instead.
 
 NAIP replaced `basemap.nationalmap.gov`, which accepted any request size while
 serving a coarser cache level behind it — its 512 px output was a 256 px image
@@ -244,7 +259,12 @@ is the whole deploy configuration:
   serving the old build.
 - `main: "worker/index.js"` runs only for requests matching no static asset.
   Every page, font and photograph is served by the asset server without invoking
-  it; `/api/site-lookup` is the one path that reaches code.
+  it; `/api/site-lookup` and `/api/map-tile` are the two paths that reach code.
+- **One secret, `ARCGIS_API_KEY`** — the map's Esri imagery key, set in the
+  dashboard (Workers & Pages → dry-gulch-site → Settings → Variables and
+  Secrets, type Secret) and never in `wrangler.jsonc`. Secrets survive deploys.
+  Set it before merging anything that needs it: without it production shows the
+  2019 aerial instead of Esri.
 - `assets.directory: "./dist"` — including `_headers`, so the CSP and HSTS
   survive. Verified, because it is the kind of thing that fails silently.
 

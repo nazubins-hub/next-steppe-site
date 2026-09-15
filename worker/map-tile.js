@@ -1,7 +1,15 @@
 /**
  * GET /api/map-tile?z=&x=&y=&layer=  — the handler; `worker/index.js` routes to it.
  *
- * One quantised XYZ imagery tile, proxied and cached at the edge.
+ * One quantised XYZ imagery tile, proxied. Two kinds of layer come through here,
+ * and they are cached in opposite ways for opposite reasons:
+ *
+ *   naip, hillshade   USGS renders on demand, keyless and public domain. Held at
+ *                     our edge for a week, because that cache is what makes a
+ *                     15-second render usable at all.
+ *   imagery           Esri World Imagery, a real 256 px pyramid behind a CDN,
+ *                     reached with our ArcGIS Location Platform key. Passed
+ *                     through, and NEVER put in the shared cache.
  *
  * WHY THIS EXISTS: THE CACHE WAS ALWAYS THERE AND WE ALWAYS MISSED IT
  * The map used to ask USGS for one `exportImage` render per view, with a bbox
@@ -29,18 +37,31 @@
  * renders while the visitor is still reading their elevation result — which is
  * the only way to hide a cold 15-second render, because nothing makes it fast.
  *
+ * WHY ESRI COMES THROUGH HERE TOO, AND WHY IT NEVER TOUCHES THE SHARED CACHE
+ * The key. A Location Platform key in the page is a key anyone can lift and
+ * bill against; here it never leaves the Worker, and `badTile()` bounds what it
+ * can be spent on to Colorado at the zooms the map offers. Esri's product terms
+ * license commercial deployment through authenticated access, and nothing in
+ * them grants serving one billed tile to many visitors — so an Esri tile is
+ * fetched once for each visitor who sees it, and only that visitor's browser
+ * keeps it (`Cache-Control: private`). The shared cache that makes USGS usable
+ * would, for Esri, be a way of not paying for tiles. Its CDN answers in a
+ * fraction of a second, so there is no cold render to hide and nothing to
+ * pre-warm.
+ *
  * XYZ RATHER THAN A BBOX IN THE QUERY STRING
  * A bbox parameter is a general-purpose imagery proxy with our name on the
  * bandwidth. Integer tile coordinates on a fixed grid are a closed set, they
- * are bounded below to Colorado, and they are the cache key. If the imagery
- * source is ever swapped for a real tile pyramid, the client does not change.
+ * are bounded below to Colorado, and they are the cache key. When the imagery
+ * source was swapped for a real tile pyramid, the client barely changed.
  *
  * WHAT THIS ROUTE KNOWS ABOUT THE VISITOR
  * Tile coordinates, and nothing else. No address reaches it — `site-lookup.js`
  * is the only route that ever sees one, and it does not pass it on. A tile is
  * coarser than the rounded coordinates that already go to USGS for the terrain
- * read, and unlike the address lookup this response is deliberately CACHEABLE
- * and shared: that sharing is the entire point. `observability` stays off in
+ * read. The USGS tiles are deliberately CACHEABLE and shared: that sharing is
+ * the entire point. Esri receives the same tile coordinates from this Worker —
+ * never the visitor's IP, never an address. `observability` stays off in
  * wrangler.jsonc, so these URLs are not sampled into a log either.
  */
 
@@ -48,33 +69,41 @@ const NAIP =
   'https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPPlus/ImageServer/exportImage';
 const ELEV =
   'https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer/exportImage';
+const ESRI =
+  'https://ibasemaps-api.arcgis.com/arcgis/rest/services/World_Imagery/MapServer';
 
-// Same two layers the panel offers, and the same reasoning as the UI's
-// MAP_LAYERS: JPEG for both, because a hillshade carries per-cell DEM noise
-// that is photographic in character however grey it looks.
+/* The same three layers the panel offers. The two USGS layers are JPEG renders,
+   because a hillshade carries per-cell DEM noise that is photographic in
+   character however grey it looks; Esri's pyramid is JPEG already.
+
+   Each zoom range is in the layer's OWN tile levels. The map draws a view at
+   zoom z from z itself for a 1024 px render, and from z + 2 for Esri's 256 px
+   pyramid — the same ground at the same density. Esri's real detail ends at z19
+   over the valley; z20 and deeper come back as a 2.5 KB grey placeholder,
+   measured, so the map stretches z19 rather than asking for deeper. */
 const LAYERS = {
-  aerial:    { url: NAIP },
-  hillshade: { url: ELEV, rule: { rasterFunction: 'Hillshade Gray' } },
+  naip:      { kind: 'render', url: NAIP, zMin: 14, zMax: 20 },
+  hillshade: { kind: 'render', url: ELEV, rule: { rasterFunction: 'Hillshade Gray' },
+               zMin: 14, zMax: 20 },
+  imagery:   { kind: 'esri', zMin: 16, zMax: 19 },
 };
 
-/* 1024 and not 256. This is not a real tile pyramid — every tile is an
-   on-demand render, so the per-request cost is a render, not a byte count, and
-   sixteen 256 px tiles cost sixteen renders where one 1024 costs one. At z16
-   that puts 471 m of ground across 1024 px, or 0.46 m/px, which is the native
-   resolution of the 60 cm NAIP underneath it. */
-const TILE_PX = 1024;
+/* `aerial` was the NAIP layer's name until Esri took the default. A page loaded
+   before the deploy still asks for it, and should keep getting pictures. */
+const ALIASES = { aerial: 'naip' };
 
-// Zoom range the client offers. z16 ≈ 471 m of ground across the stage, which
-// is what the old 500 m default was chosen to be: wide enough to contain a
-// geocode that missed by a couple of hundred metres.
-const Z_MIN = 14;
-const Z_MAX = 20;
+/* 1024 and not 256, for the USGS renders. This is not a real tile pyramid —
+   every tile is an on-demand render, so the per-request cost is a render, not a
+   byte count, and sixteen 256 px tiles cost sixteen renders where one 1024
+   costs one. At z16 that puts 471 m of ground across 1024 px, or 0.46 m/px,
+   which is the native resolution of the 60 cm NAIP underneath it. */
+const TILE_PX = 1024;
 
 const MERC = 20037508.342789244;
 
 // SITE_RULES.coBbox, restated. A tile outside Colorado is not a tile this
 // database has any business rendering, and the bound is what keeps the route
-// from being a free imagery CDN for the rest of the country.
+// from being a free imagery CDN for the rest of the country — on our key, too.
 const CO = { west: -109.06, south: 36.99, east: -102.04, north: 41 };
 
 const tileBbox = (z, x, y) => {
@@ -89,10 +118,11 @@ const latOf = (y) =>
   (Math.atan(Math.exp(((y / MERC) * 180 * Math.PI) / 180)) * 360) / Math.PI - 90;
 
 // Reject rather than render. An out-of-range tile is a client bug or a probe,
-// and either way answering it costs a 15-second upstream render.
+// and either way answering it costs a 15-second upstream render or a billed tile.
 function badTile(z, x, y, layer) {
-  if (!LAYERS[layer]) return 'unknown layer';
-  if (!Number.isInteger(z) || z < Z_MIN || z > Z_MAX) return 'zoom out of range';
+  const l = LAYERS[layer];
+  if (!l) return 'unknown layer';
+  if (!Number.isInteger(z) || z < l.zMin || z > l.zMax) return 'zoom out of range';
   const n = 2 ** z;
   if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x >= n || y >= n) {
     return 'tile out of range';
@@ -137,6 +167,27 @@ const plainError = (msg, status) =>
    the render is given — see salvage below, which is the point of the split. */
 const WAIT_MS = 25000;
 
+/* Esri's tiles are cached at its CDN, so a tile that has not come in ten
+   seconds is not coming; there is no render worth salvaging behind it. */
+const ESRI_WAIT_MS = 10000;
+
+/* A sentinel rather than a rejection: a timeout is an ordinary outcome here,
+   not an error, and racing against a rejection would make the salvage path look
+   like a failure to the catch that handles real ones. */
+const TIMED_OUT = Symbol('timeout');
+
+async function withTimeout(promise, ms) {
+  let timer;
+  const deadline = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(TIMED_OUT), ms);
+  });
+  try {
+    return await Promise.race([promise, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /* NEVER ABORT THE UPSTREAM. Observed in production: a cold z17 tile over Denver
    took 30.1 s, hit an AbortController, returned 504 and cached NOTHING — so the
    retry started the same render from zero and paid another 20 s. The render was
@@ -167,7 +218,54 @@ async function store(cache, key, res) {
   return out;
 }
 
-export async function handleMapTile(request, ctx) {
+/* ── Esri World Imagery ──
+   The key is added here and nowhere else. Two rules follow from it being in
+   the upstream URL: no error below ever echoes that URL, and nothing Esri
+   returns is kept anywhere but the visitor's own browser.
+
+   Esri refuses a MISSING token as HTTP 200 with a JSON body — measured, the
+   keyless probe answered `200` and `{"error":{"code":499,"message":"Token
+   Required."}}` — so a status check alone would pass that along as a tile. The
+   content type is what decides: an image is a tile, anything else is a refusal.
+   A WRONG token is not refused at all: measured 2026-09-15, a junk string and
+   an invented AAPK-shaped key both got real imagery, on CloudFront cache misses
+   as well as hits. So a lapsed key leaves the map drawing and the site quietly
+   out of licence; renewing before the expiry date is the only guard. A missing
+   key is a 503 here, and the panel falls back to the 2019 aerial on that, or
+   on Esri being down. */
+async function esriTile(z, x, y, env) {
+  const key = env && env.ARCGIS_API_KEY;
+  if (!key) return plainError('Aerial imagery is not configured.', 503);
+
+  let res;
+  try {
+    res = await withTimeout(
+      fetch(`${ESRI}/tile/${z}/${y}/${x}?token=${encodeURIComponent(key)}`),
+      ESRI_WAIT_MS,
+    );
+  } catch {
+    return plainError('Aerial imagery upstream did not answer.', 504);
+  }
+  if (res === TIMED_OUT) return plainError('Aerial imagery upstream did not answer.', 504);
+  if ([401, 403, 498, 499].includes(res.status)) {
+    return plainError('Aerial imagery key was refused.', 502);
+  }
+  if (!res.ok) return plainError(`Aerial imagery upstream returned ${res.status}.`, 502);
+
+  const type = res.headers.get('Content-Type') || '';
+  if (!type.startsWith('image/')) return plainError('Aerial imagery key was refused.', 502);
+
+  return new Response(res.body, {
+    headers: {
+      'Content-Type': type,
+      // The visitor's browser, and nothing shared — see the header comment.
+      'Cache-Control': 'private, max-age=86400',
+      'X-Content-Type-Options': 'nosniff',
+    },
+  });
+}
+
+export async function handleMapTile(request, env, ctx) {
   if (request.method !== 'GET' && request.method !== 'HEAD') {
     return new Response('Method Not Allowed', { status: 405, headers: { Allow: 'GET, HEAD' } });
   }
@@ -176,10 +274,13 @@ export async function handleMapTile(request, ctx) {
   const z = Number(q.get('z'));
   const x = Number(q.get('x'));
   const y = Number(q.get('y'));
-  const layer = q.get('layer') || 'aerial';
+  const asked = q.get('layer') || 'imagery';
+  const layer = ALIASES[asked] || asked;
 
   const bad = badTile(z, x, y, layer);
   if (bad) return plainError(bad, 400);
+
+  if (LAYERS[layer].kind === 'esri') return esriTile(z, x, y, env);
 
   // Cache under a NORMALISED key, not the request as it arrived. Parameter
   // order and any stray query string a link picked up would otherwise each mint
@@ -196,22 +297,11 @@ export async function handleMapTile(request, ctx) {
 
   const pending = fetchTile(z, x, y, layer);
 
-  /* A sentinel object rather than a rejection: a timeout is an ordinary
-     outcome here, not an error, and racing against a rejection would make the
-     salvage path look like a failure to the catch below. */
-  const TIMED_OUT = Symbol('timeout');
-  let timer;
-  const deadline = new Promise((resolve) => {
-    timer = setTimeout(() => resolve(TIMED_OUT), WAIT_MS);
-  });
-
   let res;
   try {
-    res = await Promise.race([pending, deadline]);
+    res = await withTimeout(pending, WAIT_MS);
   } catch {
     return plainError('Imagery upstream did not answer.', 504);
-  } finally {
-    clearTimeout(timer);
   }
 
   if (res === TIMED_OUT) {
@@ -231,9 +321,23 @@ export async function handleMapTile(request, ctx) {
   return (await store(cache, key, res)) || plainError('Imagery upstream returned no image.', 502);
 }
 
+/* ── why the Esri picture carries no date ──
+   The capture date would be worth showing — a visitor reads an aerial as
+   current unless told otherwise — and Esri publishes one per place in the
+   service's metadata layers. But the Location Platform tile host answers
+   tiles and nothing else: `identify` and a per-layer `query` both came back
+   404 with our key, measured 2026-09-14. The metadata answers on
+   services.arcgisonline.com, which answers anonymously as well, so a 200 there
+   proves nothing about licence — it is the anonymous access this project
+   refuses for the tiles themselves. So the caption says capture dates vary,
+   and states no date. A guessed one would be worse than none. */
+
 /* ── pre-warm ──
    Called from the address lookup with `ctx.waitUntil`, so it runs after the
-   response has gone and delays nothing.
+   response has gone and delays nothing — and only when the 2019 aerial is what
+   the map opens on, which is when the Esri key is missing. With the key, Esri's
+   CDN is fast enough to need no warming, and warming NAIP would spend eighteen
+   USGS renders per lookup on a layer most visitors never switch to.
 
    This is the only thing that can hide a cold render. The visitor spends real
    seconds reading their elevation, aspect and hardiness zone before they scroll
@@ -246,7 +350,7 @@ export async function handleMapTile(request, ctx) {
    second step costs a median 15.7 s of cold render per tile, which is the
    original complaint reappearing one gesture later. Warming z17 as well makes
    the whole common path warm instead of just its first frame.
-   
+
    Eighteen subrequests, against a limit of fifty. */
 const WARM_LEVELS = [16, 17];
 
@@ -267,12 +371,12 @@ export function warmTiles(origin, lat, lon) {
       for (let dx = -1; dx <= 1; dx++) {
         const x = x0 + dx;
         const y = y0 + dy;
-        if (badTile(z, x, y, 'aerial')) continue;
+        if (badTile(z, x, y, 'naip')) continue;
         // Through our own route, so the warm populates the same cache entry the
         // browser will ask for. Warming USGS directly would heat CloudFront's
         // copy and leave ours empty — the visitor would still pay for the miss.
         jobs.push(
-          fetch(`${origin}/api/map-tile?z=${z}&x=${x}&y=${y}&layer=aerial`).catch(() => {}),
+          fetch(`${origin}/api/map-tile?z=${z}&x=${x}&y=${y}&layer=naip`).catch(() => {}),
         );
       }
     }

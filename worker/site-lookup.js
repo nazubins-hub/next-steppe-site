@@ -83,7 +83,7 @@ async function timed(url, ms) {
   }
 }
 
-async function lookup(request, ctx) {
+async function lookup(request, env, ctx) {
   const address = (new URL(request.url).searchParams.get('address') || '').trim();
 
   if (!address) return json({ error: 'no-address', message: 'Enter an address.' }, 400);
@@ -177,7 +177,12 @@ async function lookup(request, ctx) {
   // whether or not it finishes. Rounded coordinates only, and no address: what
   // this starts is a fetch for squares of public aerial photography at the two
   // zoom levels the visitor is about to use.
-  if (ctx && typeof ctx.waitUntil === 'function') {
+  //
+  // Only when the map opens on the 2019 aerial, which is when there is no Esri
+  // key. With the key the map opens on Esri's cached pyramid, which needs no
+  // warming, and eighteen USGS renders per lookup would be spent on a layer
+  // most visitors never switch to.
+  if (!(env && env.ARCGIS_API_KEY) && ctx && typeof ctx.waitUntil === 'function') {
     try {
       ctx.waitUntil(warmTiles(new URL(request.url).origin, lat, lon));
     } catch {
@@ -207,7 +212,7 @@ async function lookup(request, ctx) {
 // one upstream geocode for no payload — but rejecting it means `curl -I` answers
 // 405 on an endpoint that plainly works, which reads as a broken route to anyone
 // checking it and to any uptime monitor pointed at it.
-export const handleSiteLookup = async (request, ctx) =>
+export const handleSiteLookup = async (request, env, ctx) =>
   request.method === 'GET' || request.method === 'HEAD'
-    ? lookup(request, ctx)
+    ? lookup(request, env, ctx)
     : new Response('Method Not Allowed', { status: 405, headers: { Allow: 'GET, HEAD' } });

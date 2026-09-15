@@ -28,6 +28,15 @@
     "not_found_handling": "404-page"
   }
 
+  // ONE SECRET: ARCGIS_API_KEY — the pin map's Esri World Imagery key, an
+  // ArcGIS Location Platform API key with the Basemaps privilege only. It is
+  // NOT in this file and must never be: set it in the dashboard (Workers &
+  // Pages → dry-gulch-site → Settings → Variables and Secrets, type Secret) or
+  // with `npx wrangler secret put ARCGIS_API_KEY`. Secrets survive deploys from
+  // GitHub. For `wrangler dev` it lives in .dev.vars, which .gitignore keeps out
+  // of this public repo. Without it the map falls back to the 2019 USGS aerial;
+  // see worker/map-tile.js.
+
   // NO `observability` block, deliberately. Enabling it samples request URLs
   // into Cloudflare's logs, and `/api/site-lookup?address=...` carries a
   // visitor's street address in its query string. SECURITY.md promises that

@@ -18,9 +18,13 @@
  * Workers static assets are served BEFORE this Worker runs. Every page, style,
  * font and photograph matches an asset and never reaches this code — which is
  * the point, because a Worker invocation per image would be absurd. Only a
- * request matching no asset arrives here. `/api/site-lookup` is the one route
- * that means, and everything else falls through to `env.ASSETS.fetch()` so the
- * 404 page is still the built one rather than something invented here.
+ * request matching no asset arrives here. Two `/api/` routes mean something,
+ * and everything else falls through to `env.ASSETS.fetch()` so the 404 page is
+ * still the built one rather than something invented here.
+ *
+ * `env` carries ARCGIS_API_KEY, the one secret this Worker holds — the map's
+ * Esri imagery key. It is read in map-tile.js and nowhere else, and it never
+ * reaches a response.
  */
 
 import { handleSiteLookup } from './site-lookup.js';
@@ -31,17 +35,19 @@ export default {
     const { pathname } = new URL(request.url);
 
     // `ctx` reaches the lookup so it can pre-warm map tiles with waitUntil
-    // after the response has gone. See warmTiles() in map-tile.js.
+    // after the response has gone, and `env` so it knows whether that is worth
+    // doing. See warmTiles() in map-tile.js.
     if (pathname === '/api/site-lookup') {
-      return handleSiteLookup(request, ctx);
+      return handleSiteLookup(request, env, ctx);
     }
 
     // Imagery for the pin map, addressed by integer z/x/y so the edge cache can
-    // actually hit. map-tile.js explains why that is the whole fix.
+    // actually hit. map-tile.js explains why that is the whole fix, and why the
+    // Esri layer is the one exception to it.
     if (pathname === '/api/map-tile') {
       // `ctx` so a render that outruns the visitor's patience is still finished
       // and cached in the background rather than thrown away. See map-tile.js.
-      return handleMapTile(request, ctx);
+      return handleMapTile(request, env, ctx);
     }
 
     // Not an asset and not a route: hand it back to the asset server, which

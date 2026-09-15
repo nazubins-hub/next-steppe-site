@@ -399,8 +399,13 @@ function weightedMean(h) {
 
 /* Elevation, slope and aspect for a point. Three requests, run together —
    they do not depend on one another and 3DEP is slow enough that doing them in
-   sequence is felt. */
-async function measureTerrain(lat, lon) {
+   sequence is felt.
+
+   The radius is the analysis radius for a pin. A traced bed that reaches
+   further than that gets a radius that contains it — see bedRadiusM — because
+   a reading that covers half a bed describes the wrong ground as confidently
+   as the right. */
+async function measureTerrain(lat, lon, radiusM = SITE_RULES.analysisRadiusM) {
   /* One controller for all three requests. They are a single measurement — two
      of three numbers is not a site — so they succeed or are called off together,
      and an abandoned tab does not leave three sockets open against USGS. */
@@ -408,7 +413,7 @@ async function measureTerrain(lat, lon) {
   const deadline = Date.now() + LOOKUP_BUDGET_MS;
   const timer = setTimeout(() => ctl.abort(), LOOKUP_BUDGET_MS);
   try {
-    return await measureWith(lat, lon, ctl.signal, deadline);
+    return await measureWith(lat, lon, radiusM, ctl.signal, deadline);
   } catch (e) {
     if (e.name === "AbortError") {
       throw new Error(
@@ -423,8 +428,7 @@ async function measureTerrain(lat, lon) {
   }
 }
 
-async function measureWith(lat, lon, signal, deadline) {
-  const radiusM = SITE_RULES.analysisRadiusM;
+async function measureWith(lat, lon, radiusM, signal, deadline) {
   const b = bbox3857(lat, lon, radiusM);
   const geometry = JSON.stringify({
     xmin: b.xmin, ymin: b.ymin, xmax: b.xmax, ymax: b.ymax,
@@ -609,29 +613,59 @@ function outsideCoverage(lat, lon) {
    same image, so the wider one costs nothing and is better elsewhere in the
    state.
 
-   NOT Esri World Imagery, which is sharper still at ~30 cm. Its copyright names
-   Esri and Vantor, anonymous access to services.arcgisonline.com is not licensed
-   for a commercial site, and `World_Imagery` is a cached tile service whose
-   export endpoint 500s — so it would also mean a grid of z/y/x tiles instead of
-   one image per view. `ingest.py` refuses CC-BY-NC photographs on exactly this
-   reasoning; imagery is not a special case. */
-/* WHICH UPSTREAM EACH LAYER MEANS NOW LIVES IN worker/map-tile.js, along with
-   the JPEG decision for both (measured at 1024: aerial 199 KB as JPEG against
-   935 KB as PNG; hillshade 72 KB against 367 KB — a hillshade carries per-cell
-   DEM noise that is photographic in character however grey it looks). The
-   browser addresses `/api/map-tile` and names a layer; it no longer holds a
-   service URL, because the tile cache is what makes the map usable and the
-   cache lives at the edge. What is left here is what the visitor sees. */
+   It is no longer the default. Esri World Imagery is sharper and newer, and
+   the block below says why it was refused before and is licensed now. */
+/* ESRI WORLD IMAGERY, LICENSED NOW, AND NAIP KEPT BESIDE IT.
+
+   Esri was refused while the only way to it was anonymous use of
+   services.arcgisonline.com, which is not licensed for a commercial site —
+   `ingest.py` refuses CC-BY-NC photographs on the same reasoning. It is now
+   reached through an ArcGIS Location Platform subscription: the key lives in
+   the Worker (worker/map-tile.js), the browser only ever asks `/api/map-tile`,
+   and Esri's own terms permit tracing features over World Imagery to make
+   vector data, which is what the house and bed outlines are.
+
+   Measured 2026-09-14 at public points across the valley:
+
+     Esri   Vantor Vivid, 0.31-0.34 m, captured 2023-09-23 (Edwards) to
+            2025-11-05 (Vail Village, Avon)
+     NAIP   0.60 m, flown 2019
+
+   Twice the detail and six years newer. NAIP stays, as "2019 aerial": Esri's
+   November captures carry 4-19% deep shadow at z18 against NAIP's 0-6%, and a
+   bed in shadow is a bed nobody can trace. Real detail ends at z19 over Vail —
+   z20 and deeper come back as a 2.5 KB grey placeholder — so the layer stops
+   there and the map stretches z19 above it.
+
+   `zOffset` and `maxZ` say how a layer fills the stage, which is one Web
+   Mercator tile at the view's zoom. NAIP and the hillshade render that tile as
+   one 1024 px image (zOffset 0), a JPEG for both — measured at 1024, aerial
+   199 KB against 935 KB as PNG, hillshade 72 KB against 367 KB, because a
+   hillshade carries per-cell DEM noise however grey it looks. Esri serves a
+   real 256 px JPEG pyramid, so the same ground is a 4 x 4 block from two
+   levels down (zOffset 2): the same density, from a cache instead of a render.
+
+   Which upstream each layer means lives in worker/map-tile.js. What is left
+   here is what the visitor sees, and the credit each layer owes. */
 const MAP_LAYERS = {
-  aerial: {
+  imagery: {
     label: "Aerial",
     hint: "find your roof",
+    credit: "Powered by Esri · Source: Esri, Vantor, Earthstar Geographics, " +
+            "and the GIS User Community",
+    zOffset: 2, maxZ: 19,
+  },
+  naip: {
+    label: "2019 aerial",
+    hint: "older, flatter light — try it where shadow hides the ground",
     credit: "USGS NAIP orthoimagery",
+    zOffset: 0, maxZ: 20,
   },
   hillshade: {
     label: "Landform",
     hint: "see which way it falls",
     credit: "USGS 3DEP hillshade",
+    zOffset: 0, maxZ: 20,
   },
 };
 
@@ -740,37 +774,48 @@ function mapBbox(view) {
    margin — which is what makes the NEXT pan instant — arrives during the
    seconds the visitor spends looking at what just loaded.
 
-   Returned with fractional offsets rather than pixels, so the stage can be any
-   size CSS gives it. A tile is exactly one stage wide by construction. */
-function mapTiles(view, margin = 0) {
+   Returned with fractional offsets and a size rather than pixels, so the stage
+   can be any size CSS gives it. For a 1024 px layer a tile is exactly one stage
+   wide and the margin is a stage. For Esri's 256 px pyramid a tile is a
+   quarter of the stage and the margin is one of those — about 49 tiles for a
+   settled view, which is also what Esri bills — because its tiles come out of
+   a cache in a fraction of a second, and a deeper ring would only buy tiles
+   nobody looks at. */
+function mapTiles(view, layerKey, margin = 0) {
   const b = mapBbox(view);
-  const s = b.s;
+  const z = layerZoom(view, layerKey);
+  const s = mercTile(z);
   const tx0 = Math.floor((b.xmin + MERC) / s) - margin;
   const tx1 = Math.floor((b.xmax + MERC) / s) + margin;
   const ty0 = Math.floor((MERC - b.ymax) / s) - margin;
   const ty1 = Math.floor((MERC - b.ymin) / s) + margin;
-  const n = 2 ** view.z;
+  const n = 2 ** z;
   const out = [];
   for (let y = ty0; y <= ty1; y++) {
     for (let x = tx0; x <= tx1; x++) {
       if (x < 0 || y < 0 || x >= n || y >= n) continue;
-      out.push({
-        z: view.z, x, y,
-        key: `${view.z}/${x}/${y}`,
-        left: (-MERC + x * s - b.xmin) / s,
-        top:  (b.ymax - (MERC - y * s)) / s,
-      });
+      out.push({ z, x, y, key: `${z}/${x}/${y}`, ...tilePlacement(view, { z, x, y }) });
     }
   }
   return out;
 }
 
-/* Where a tile from ANOTHER zoom sits in the current view, as fractions of the
-   stage. This is what keeps the previous level on screen while a new one loads:
-   on a zoom the old tiles are still perfectly good imagery of the same ground,
-   just at the wrong scale, so they are re-projected into the new geometry and
-   left underneath until the replacements arrive. The stage never goes beige. */
-function ghostPlacement(view, tile) {
+/* The level a layer draws a view from: its own offset below the view, and
+   never past the deepest level with real pixels behind it. Above that the
+   last real level is stretched, which is blurrier than a real tile and far
+   better than Esri's grey "not available" square. */
+function layerZoom(view, layerKey) {
+  const l = MAP_LAYERS[layerKey];
+  return Math.min(view.z + l.zOffset, l.maxZ);
+}
+
+/* Where any tile sits in the current view, as fractions of the stage. The
+   ghost uses it too, and that is what keeps the previous level on screen while
+   a new one loads: on a zoom the old tiles are still perfectly good imagery of
+   the same ground, just at the wrong scale, so they are re-projected into the
+   new geometry and left underneath until the replacements arrive. The stage
+   never goes beige. */
+function tilePlacement(view, tile) {
   const b = mapBbox(view);
   const s = mercTile(tile.z);
   return {
@@ -861,26 +906,10 @@ function feetBetween(a, b) {
    anyway: HIZ 0 is a rule about what sits under the eaves. It is stated on
    screen rather than presented as survey precision. */
 
-/* Distance in FEET from a point to a line segment, in local flat coordinates.
-   Longitude is scaled by cos(latitude) first so a degree east and a degree
-   north are the same size before any of the geometry runs; without that the
-   projection of the point onto the segment lands in the wrong place, and the
-   error grows with how east-west the wall runs. */
-function feetToSegment(p, a, b, lat0) {
-  const k = Math.cos((lat0 * Math.PI) / 180);
-  const px = p.lon * k, py = p.lat;
-  const ax = a[0] * k,  ay = a[1];
-  const bx = b[0] * k,  by = b[1];
-  const dx = bx - ax,   dy = by - ay;
-  const t = dx === 0 && dy === 0
-    ? 0
-    : Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)));
-  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy)) * 111320 / M_PER_FT;
-}
-
-/* Ray casting. A planting area INSIDE the footprint is a courtyard, a light
-   well, or — much more likely — a mis-tap, and either way the honest distance
-   is zero rather than the distance to the nearest wall from the inside. */
+/* Ray casting on a lon/lat ring, for taps: which footprint, which bed. The
+   distance arithmetic below uses pointInRing on projected metres, where a
+   planting area inside the outline measures zero — a courtyard, a light well,
+   or much more likely a mis-tap, and either way not "so far from the wall". */
 function ringContains(ring, lat, lon) {
   let inside = false;
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
@@ -892,22 +921,229 @@ function ringContains(ring, lat, lon) {
   return inside;
 }
 
-/* The one distance the panel actually uses. Returns null when there is nothing
-   to measure to, so every caller keeps the "still a question" branch that the
-   manual distance buttons live in. */
-function feetToHouse(house, plant) {
-  if (!house || !plant) return null;
-  if (house.kind === "point") return feetBetween(house, plant);
-  const ring = house.ring;
-  if (!ring || ring.length < 3) return null;
-  if (ringContains(ring, plant.lat, plant.lon)) return 0;
-  const lat0 = ring.reduce((t, p) => t + p[1], 0) / ring.length;
+/* ═══════════════ THE BED IS A SHAPE TOO ═══════════════
+
+   One ✽ pin answered "how far from the house?" from wherever someone tapped,
+   and a bed is not a point. Its nearest edge is what the fire bands are about,
+   its area is what the planting is sized from, and the ground under it is what
+   the terrain read should describe. So beds are traced like the house, and
+   measured the way the paid analysis measures them.
+
+   THESE ARE PORTS, NOT LOOK-ALIKES. scripts/geometry.py measures the same
+   outlines when the office feeds them to a site analysis, and a visitor must
+   not be shown one area or one distance to the wall here and another there.
+   So what follows is geometry.py line for line: the same equirectangular
+   projection about the mean of every vertex drawn, the same shoelace, the same
+   area centroid, the same edge-to-edge gap with overlap counted as zero — and
+   the constants arrive through SITE_RULES.geometry rather than being typed.
+
+   The house is measured the same way whatever it is. A traced ring and a
+   tapped footprint are rings; a lone pin is a ring of one vertex, which the
+   gap arithmetic handles as the point it is. */
+const GEO = SITE_RULES.geometry;
+const M2_PER_FT2 = M_PER_FT * M_PER_FT;
+const round1 = v => Math.round(v * 10) / 10;
+
+/* geometry._project: lon/lat to metres east/north about (lat0, lon0). */
+function projectAbout(ring, lat0, lon0) {
+  const kx = GEO.mPerDegLonEq * Math.cos((lat0 * Math.PI) / 180);
+  return ring.map(([lon, lat]) => [(lon - lon0) * kx, (lat - lat0) * GEO.mPerDegLat]);
+}
+
+/* geometry._shoelace: signed area of a projected ring, square metres. */
+function shoelace(pts) {
+  let a = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const [x1, y1] = pts[i], [x2, y2] = pts[(i + 1) % pts.length];
+    a += x1 * y2 - x2 * y1;
+  }
+  return a / 2;
+}
+
+/* geometry._centroid: the AREA centroid. The vertex mean drifts toward
+   whichever edge was clicked most, and on a traced curve that is the curve. */
+function centroidXY(pts) {
+  const a = shoelace(pts);
+  if (Math.abs(a) < 1e-9) {
+    return [pts.reduce((t, p) => t + p[0], 0) / pts.length,
+            pts.reduce((t, p) => t + p[1], 0) / pts.length];
+  }
+  let cx = 0, cy = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const [x1, y1] = pts[i], [x2, y2] = pts[(i + 1) % pts.length];
+    const cross = x1 * y2 - x2 * y1;
+    cx += (x1 + x2) * cross;
+    cy += (y1 + y2) * cross;
+  }
+  return [cx / (6 * a), cy / (6 * a)];
+}
+
+/* geometry._perimeter */
+function perimeterM(pts) {
+  let p = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const [x1, y1] = pts[i], [x2, y2] = pts[(i + 1) % pts.length];
+    p += Math.hypot(x2 - x1, y2 - y1);
+  }
+  return p;
+}
+
+/* geometry._seg_distance */
+function segDistM(p, a, b) {
+  const dx = b[0] - a[0], dy = b[1] - a[1];
+  const L2 = dx * dx + dy * dy;
+  if (L2 === 0) return Math.hypot(p[0] - a[0], p[1] - a[1]);
+  const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L2));
+  return Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy));
+}
+
+/* geometry._in_ring: planar ray casting, in whatever x/y it is given. */
+function pointInRing(pts, x, y) {
+  let inside = false;
+  for (let i = 0, n = pts.length; i < n; i++) {
+    const [x1, y1] = pts[i], [x2, y2] = pts[(i + 1) % n];
+    if ((y1 > y) !== (y2 > y) && x1 + ((y - y1) * (x2 - x1)) / (y2 - y1) > x) inside = !inside;
+  }
+  return inside;
+}
+
+/* geometry._orient, _on_segment, _segments_cross */
+const orient = (a, b, c) => {
+  const v = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+  return (v > 1e-12) - (v < -1e-12);
+};
+const onSegment = (a, b, p) =>
+  Math.min(a[0], b[0]) - 1e-12 <= p[0] && p[0] <= Math.max(a[0], b[0]) + 1e-12 &&
+  Math.min(a[1], b[1]) - 1e-12 <= p[1] && p[1] <= Math.max(a[1], b[1]) + 1e-12;
+function segmentsCross(a1, a2, b1, b2) {
+  const o1 = orient(a1, a2, b1), o2 = orient(a1, a2, b2);
+  const o3 = orient(b1, b2, a1), o4 = orient(b1, b2, a2);
+  if (o1 !== o2 && o3 !== o4) return true;
+  return (o1 === 0 && onSegment(a1, a2, b1)) || (o2 === 0 && onSegment(a1, a2, b2)) ||
+         (o3 === 0 && onSegment(b1, b2, a1)) || (o4 === 0 && onSegment(b1, b2, a2));
+}
+
+/* geometry._rings_overlap. Containment catches a bed drawn inside the house;
+   crossing edges catch two outlines laid across each other; each misses what
+   the other finds. */
+function ringsOverlap(a, b) {
+  for (const [ring, other] of [[a, b], [b, a]]) {
+    if (other.length >= 3 && ring.some(([x, y]) => pointInRing(other, x, y))) return true;
+  }
+  for (let i = 0; i < a.length; i++) {
+    for (let j = 0; j < b.length; j++) {
+      if (segmentsCross(a[i], a[(i + 1) % a.length], b[j], b[(j + 1) % b.length])) return true;
+    }
+  }
+  return false;
+}
+
+/* geometry.ring_gap_m: edge to edge, never centre to centre, and overlap is
+   zero — a bed drawn over the house is HIZ 0, not "3 m from its own wall". */
+function ringGapM(a, b) {
+  if (ringsOverlap(a, b)) return 0;
   let best = Infinity;
-  for (let i = 0; i < ring.length; i++) {
-    const d = feetToSegment(plant, ring[i], ring[(i + 1) % ring.length], lat0);
-    if (d < best) best = d;
+  for (const [ring, other] of [[a, b], [b, a]]) {
+    for (const p of ring) {
+      for (let i = 0; i < other.length; i++) {
+        const d = segDistM(p, other[i], other[(i + 1) % other.length]);
+        if (d < best) best = d;
+      }
+    }
   }
   return best;
+}
+
+/* The ring a house is measured as. */
+const houseRing = house =>
+  !house ? null : house.kind === "point" ? [[house.lon, house.lat]] : house.ring;
+
+/* Every traced shape measured at once, the way geometry.measure() does it: one
+   projection about the mean of all their vertices, so each bed's area and its
+   gap to the house come out of the same flat frame the pipeline builds.
+   `shapes` are {id, ring}. With no beds the planting pin rides along as a ring
+   of one vertex, which gives it a distance and no area. */
+function measureOutline(house, shapes) {
+  const hr = houseRing(house);
+  const all = [...shapes.flatMap(s => s.ring), ...(hr || [])];
+  if (!all.length) return {};
+  const lat0 = all.reduce((t, p) => t + p[1], 0) / all.length;
+  const lon0 = all.reduce((t, p) => t + p[0], 0) / all.length;
+  const kx = GEO.mPerDegLonEq * Math.cos((lat0 * Math.PI) / 180);
+  const hp = hr ? projectAbout(hr, lat0, lon0) : null;
+  const out = {};
+  for (const s of shapes) {
+    const pts = projectAbout(s.ring, lat0, lon0);
+    const area = Math.abs(shoelace(pts));
+    const [cx, cy] = centroidXY(pts);
+    const rec = {
+      areaM2: round1(area),
+      areaFt2: round1(area / M2_PER_FT2),
+      perimeterFt: round1(perimeterM(pts) / M_PER_FT),
+      lat: lat0 + cy / GEO.mPerDegLat,
+      lon: lon0 + cx / kx,
+      // How far the shape reaches from its own centre: what a terrain read
+      // over it has to cover.
+      extentM: Math.max(0, ...pts.map(([x, y]) => Math.hypot(x - cx, y - cy))),
+    };
+    if (hp) {
+      rec.fromStructureFt = round1(ringGapM(pts, hp) / M_PER_FT);
+      // The far end, only to say when one bed spans two bands.
+      rec.farFt = round1(Math.max(...pts.map(p =>
+        hp.length >= 3 && pointInRing(hp, p[0], p[1]) ? 0
+          : Math.min(...hp.map((q, i) => segDistM(p, q, hp[(i + 1) % hp.length]))))) / M_PER_FT);
+    }
+    out[s.id] = rec;
+  }
+  return out;
+}
+
+/* How wide a terrain read over a bed must be: the analysis radius, or enough
+   to contain the bed if it reaches further. Whole metres, as the pipeline
+   recommends its own. */
+const bedRadiusM = geo =>
+  Math.max(SITE_RULES.analysisRadiusM, Math.ceil(geo ? geo.extentM : 0));
+
+/* An identity for a ring, so a stored reading knows whether the bed it
+   describes has since been redrawn. */
+const ringSig = ring => ring.map(([lon, lat]) => `${lon.toFixed(7)},${lat.toFixed(7)}`).join(";");
+
+/* geometry._dedupe: a tap that lands twice on one spot is one corner, and a
+   ring that ends where it began has not gained a corner by it. */
+function dedupeRing(ring) {
+  const out = [];
+  for (const p of ring) {
+    const q = out[out.length - 1];
+    if (!q || Math.abs(p[0] - q[0]) > 1e-12 || Math.abs(p[1] - q[1]) > 1e-12) out.push(p);
+  }
+  if (out.length > 1 && Math.abs(out[0][0] - out[out.length - 1][0]) < 1e-12 &&
+      Math.abs(out[0][1] - out[out.length - 1][1]) < 1e-12) out.pop();
+  return out;
+}
+
+/* Area of one ring about its own centre: the live readout while tracing, and
+   the sliver check on closing. */
+function ringAreaM2(ring) {
+  const lat0 = ring.reduce((t, p) => t + p[1], 0) / ring.length;
+  const lon0 = ring.reduce((t, p) => t + p[0], 0) / ring.length;
+  return Math.abs(shoelace(projectAbout(ring, lat0, lon0)));
+}
+
+/* An outline that crosses itself has no single inside, and its shoelace area
+   is the difference of its lobes — a figure-eight bed can measure near zero.
+   Edges that share a corner are neighbours, not a crossing. */
+function ringSelfCrosses(ring) {
+  const lat0 = ring.reduce((t, p) => t + p[1], 0) / ring.length;
+  const lon0 = ring.reduce((t, p) => t + p[0], 0) / ring.length;
+  const pts = projectAbout(ring, lat0, lon0);
+  const n = pts.length;
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      if (j === i + 1 || (i === 0 && j === n - 1)) continue;
+      if (segmentsCross(pts[i], pts[(i + 1) % n], pts[j], pts[(j + 1) % n])) return true;
+    }
+  }
+  return false;
 }
 
 /* A representative point for a house, for the "has the pin moved?" check and
@@ -961,7 +1197,7 @@ async function fetchFootprints(view, signal) {
     geometryType: "esriGeometryEnvelope",
     inSR: "3857",
     spatialRel: "esriSpatialRelIntersects",
-    outFields: "PROP_ADDR,OCC_CLS,SQMETERS",
+    outFields: "PROP_ADDR,OCC_CLS,SQMETERS,IMAGE_DATE",
     returnGeometry: "true",
     outSR: "4326",
     f: "json",
@@ -970,13 +1206,153 @@ async function fetchFootprints(view, signal) {
   if (!r.ok) throw new Error(`footprints ${r.status}`);
   const d = await r.json();
   if (d.error) throw new Error(d.error.message || "footprint query failed");
+  /* IMAGE_DATE is when the picture the outline was extracted from was taken —
+     2012-08-08 across Vail Village, measured. A house built or remodelled since
+     is missing or the wrong shape, so the date is shown beside the outline and
+     travels with it into the export. */
   return (d.features || []).map((f, i) => ({
     id: `${f.attributes.PROP_ADDR || "?"}-${i}-${Math.round(f.attributes.SQMETERS || 0)}`,
     ring: (f.geometry.rings || [[]])[0],
     addr: f.attributes.PROP_ADDR || null,
     occ: f.attributes.OCC_CLS || null,
     sqm: f.attributes.SQMETERS || null,
+    imageDate: f.attributes.IMAGE_DATE
+      ? new Date(f.attributes.IMAGE_DATE).toISOString().slice(0, 10) : null,
   })).filter(f => f.ring.length >= 3);
+}
+
+/* ═══════════════ THE OUTLINE, AS FILES ═══════════════
+
+   GeoJSON is the one the plant system reads (`geometry.py read`). Every shape
+   says what it is — `kind` is building, bed or keep — because the pipeline
+   would otherwise guess from the name, and its building words include "house"
+   and "garage": "Bed by the garage" is not a building. KML carries the same
+   shapes for Google Earth, with the kind in ExtendedData so geometry.py can
+   read that too.
+
+   Neither file carries the address. The measurements in them are the
+   website's first pass and say so; the pipeline recomputes them from the
+   outlines. Coordinates are rounded to seven places, about a centimetre —
+   far finer than any hand that drew them. */
+const r7 = v => Math.round(v * 1e7) / 1e7;
+
+/* RFC 7946 asks for an exterior ring counter-clockwise, first point repeated. */
+function closedRing(ring) {
+  const pts = ring.map(([lon, lat]) => [r7(lon), r7(lat)]);
+  let a = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const [x1, y1] = pts[i], [x2, y2] = pts[(i + 1) % pts.length];
+    a += x1 * y2 - x2 * y1;
+  }
+  const ccw = a > 0 ? pts : pts.slice().reverse();
+  return [...ccw, ccw[0]];
+}
+
+/* Only the fields that say something: an empty note is not a note. */
+const present = obj =>
+  Object.fromEntries(Object.entries(obj).filter(([, v]) => v != null && v !== ""));
+
+function outlineShapes(doc) {
+  const out = [];
+  const h = doc.house;
+  if (h) {
+    out.push({
+      name: "House",
+      geometry: h.kind === "point"
+        ? { type: "Point", coordinates: [r7(h.lon), r7(h.lat)] }
+        : { type: "Polygon", coordinates: [closedRing(h.ring)] },
+      props: present({
+        kind: "building",
+        source: h.kind === "footprint" ? "usa-structures" : h.kind,
+        imageDate: h.imageDate,
+        credit: h.kind === "footprint" ? "FEMA/ORNL USA Structures (CC BY 4.0)" : null,
+        tracedOn: h.tracedOn,
+      }),
+    });
+  }
+  for (const b of doc.beds) {
+    out.push({
+      name: b.name,
+      geometry: { type: "Polygon", coordinates: [closedRing(b.ring)] },
+      props: present({
+        kind: "bed", note: b.note, lightDeclared: b.light,
+        areaFt2: b.geo.areaFt2, perimeterFt: b.geo.perimeterFt,
+        fromStructureFt: b.geo.fromStructureFt, farFt: b.geo.farFt,
+        zone: b.zone, minIgn: b.minIgn, terrain: b.terrain, tracedOn: b.tracedOn,
+      }),
+    });
+  }
+  for (const k of doc.keeps) {
+    out.push({
+      name: k.name || "Keep",
+      geometry: k.kind === "point"
+        ? { type: "Point", coordinates: [r7(k.lon), r7(k.lat)] }
+        : { type: "Polygon", coordinates: [closedRing(k.ring)] },
+      props: { kind: "keep" },
+    });
+  }
+  return out;
+}
+
+function outlineGeoJson(doc) {
+  const shapes = outlineShapes(doc);
+  const seen = new Set();
+  const tracedOn = [];
+  for (const s of shapes) {
+    const t = s.props.tracedOn;
+    if (t && !seen.has(JSON.stringify(t))) { seen.add(JSON.stringify(t)); tracedOn.push(t); }
+  }
+  return {
+    type: "FeatureCollection",
+    // A foreign member, which RFC 7946 allows at the top level: what the file
+    // is and which pictures the lines were drawn on, for the plan to record.
+    nextsteppe: present({
+      schema: "nextsteppe-outline/1",
+      drawnAt: doc.drawnAt,
+      tracedOn: tracedOn.length ? tracedOn : null,
+      note: "Measurements are the website's first pass. A site analysis recomputes " +
+            "them from these outlines.",
+    }),
+    features: shapes.map(s => ({
+      type: "Feature",
+      properties: { name: s.name, ...s.props },
+      geometry: s.geometry,
+    })),
+  };
+}
+
+/* The description holds a bed's note and nothing else, because geometry.py
+   reads a KML description as the note when there is no ExtendedData one. The
+   facts go in ExtendedData, where Google Earth shows them as a table. */
+function outlineKml(doc) {
+  const esc = v => String(v).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const coords = ring => ring.map(([x, y]) => `${x},${y},0`).join(" ");
+  const placemark = s => {
+    const p = s.props;
+    const data = present({
+      kind: p.kind, note: p.note, lightDeclared: p.lightDeclared,
+      areaFt2: p.areaFt2, fromStructureFt: p.fromStructureFt, zone: p.zone,
+      source: p.source, imageDate: p.imageDate, credit: p.credit,
+    });
+    const geom = s.geometry.type === "Point"
+      ? `<Point><coordinates>${s.geometry.coordinates.join(",")},0</coordinates></Point>`
+      : "<Polygon><outerBoundaryIs><LinearRing><coordinates>" +
+        coords(s.geometry.coordinates[0]) +
+        "</coordinates></LinearRing></outerBoundaryIs></Polygon>";
+    return `<Placemark><name>${esc(s.name)}</name>` +
+      (p.note ? `<description>${esc(p.note)}</description>` : "") +
+      "<ExtendedData>" +
+      Object.entries(data).map(([k, v]) => `<Data name="${k}"><value>${esc(v)}</value></Data>`).join("") +
+      `</ExtendedData>${geom}</Placemark>`;
+  };
+  return '<?xml version="1.0" encoding="UTF-8"?>\n' +
+    '<kml xmlns="http://www.opengis.net/kml/2.2"><Document>' +
+    `<name>NextSteppe outline ${esc(doc.drawnAt)}</name>` +
+    "<description>Drawn on the nextsteppe.garden pin map. Measurements are the " +
+    "website's first pass; a site analysis recomputes them from these outlines.</description>" +
+    outlineShapes(doc).map(placemark).join("") +
+    "</Document></kml>\n";
 }
 
 /* ═══════════════════════ SMALL PARTS ═══════════════════════ */
@@ -1060,18 +1436,39 @@ export default function XericPlantDB() {
      it, moving the pin would silently leave numbers on screen that describe
      somewhere else — the panel compares the two and says so. */
   const [mapView, setMapView]     = useState(null);   // {lat, lon, z}
-  const [mapLayer, setMapLayer]   = useState("aerial");
+  const [mapLayer, setMapLayer]   = useState("imagery");
   const [pins, setPins]           = useState({ plant:null, house:null });
-  const [pinMode, setPinMode]     = useState("plant");
+  const [pinMode, setPinMode]     = useState("plant");   // plant | house | keep
   const [useHousePin, setUseHousePin] = useState(false);
 
   /* How the house gets marked. "tap" is the good path — one tap on the real
      footprint. "trace" is for the house the dataset does not have, and "point"
      is the old single pin, kept because it is the only one that always works.
-     See feetToHouse: the mode decides what `pins.house` holds. */
+     See measureOutline: the mode decides what `pins.house` holds. */
   const [houseMode, setHouseMode] = useState("tap");
   const [footprints, setFootprints] = useState({ status:"idle", list:[] });
-  const [trace, setTrace]         = useState([]);   // ring under construction
+
+  /* The outline being drawn and what it becomes when closed. One at a time:
+     switching what is being marked abandons it, rather than letting a
+     half-drawn house turn into a bed. `redrawId` is the bed a redraw replaces. */
+  const [trace, setTrace]         = useState(null);   // {target, ring, redrawId?}
+  const [traceError, setTraceError] = useState(null);
+
+  /* Beds and things to keep. A bed's `reading` is the terrain read taken over
+     it, with the ring it was taken for, so going back to a bed does not mean
+     another forty seconds of 3DEP — and a redrawn bed is never credited with
+     the old one's slope. Things to keep are recorded and exported only: they
+     say what the planting leaves alone, not where it goes. */
+  const [beds, setBeds]           = useState([]);
+  const [activeBedId, setActiveBedId] = useState(null);
+  const [keeps, setKeeps]         = useState([]);
+  const [keepTool, setKeepTool]   = useState("point");
+  const seqRef = useRef({ bed: 0, keep: 0 });
+
+  /* Whether the Esri layer answered at all. A key that is missing or lapsed is
+     a map on the 2019 aerial with a note, never a blank stage. */
+  const [imageryDown, setImageryDown] = useState(false);
+  const [tileErrors, setTileErrors]   = useState(0);
 
   /* The tile layer, not the image. Pans translate this element and commit one
      state update on release — updating state per pointermove would re-render
@@ -1111,10 +1508,27 @@ export default function XericPlantDB() {
 
   const effElev = effectiveElevation(siteElev, siteAspect, siteSlopePct);
 
-  /* With both pins down the distance is measured rather than chosen, and the
-     buttons stop being the source of truth. With one pin it is still a question
-     no public dataset can answer, so the buttons remain. */
-  const pinDistFt = useHousePin ? feetToHouse(pins.house, pins.plant) : null;
+  /* The planting target: the selected bed once any bed exists, the ✽ pin
+     until then. Everything that asks where the planting is asks this — the
+     distance, the terrain read, the stale-reading guard, the export. */
+  const activeBed = beds.find(b => b.id === activeBedId) || beds[0] || null;
+  const outline = useMemo(() => measureOutline(useHousePin ? pins.house : null,
+      beds.length ? beds
+        : pins.plant ? [{ id: "pin", ring: [[pins.plant.lon, pins.plant.lat]] }] : []),
+    [useHousePin, pins.house, pins.plant, beds]);
+  const bedGeo = activeBed ? outline[activeBed.id] : null;
+  const target = activeBed && bedGeo
+    ? { kind: "bed", id: activeBed.id, name: activeBed.name, sig: ringSig(activeBed.ring),
+        lat: bedGeo.lat, lon: bedGeo.lon }
+    : pins.plant ? { kind: "pin", lat: pins.plant.lat, lon: pins.plant.lon } : null;
+
+  /* With the house marked the distance is measured rather than chosen, and the
+     buttons stop being the source of truth: from the bed's nearest edge, or
+     from the pin while there is no bed. Without the house it is still a
+     question no public dataset can answer, so the buttons remain. */
+  const targetGeo = activeBed ? bedGeo : outline.pin;
+  const pinDistFt = useHousePin && pins.house && targetGeo && targetGeo.fromStructureFt != null
+    ? targetGeo.fromStructureFt : null;
   const effDistFt = pinDistFt == null ? siteDist : pinDistFt;
   const siteZone = zoneForDistance(effDistFt);
 
@@ -1226,14 +1640,23 @@ export default function XericPlantDB() {
   /* Has the visitor moved a control away from what was measured? Compared on
      the rounded values the panel actually displays, so "8,546 ft" does not
      report itself as overridden because of a hidden decimal. */
-  /* How far the planting pin now sits from the point the current reading came
-     from. This is the guard against a stale number: 695 ft of effective
-     elevation rides on 300 m of pin movement at the test address, so a reading
-     that no longer describes the pin is worse than no reading. 30 ft of slop
-     absorbs a fingertip on a phone without nagging. */
-  const pinMovedFt = (measured && measured.measuredAt && pins.plant)
-    ? feetBetween(measured.measuredAt, pins.plant) : 0;
-  const pinMoved = pinMovedFt > 30;
+  /* Does the reading on screen still describe the planting target? This is the
+     guard against a stale number: 695 ft of effective elevation rides on 300 m
+     of pin movement at the test address, so a reading that no longer describes
+     the ground being planted is worse than no reading. For the pin, 30 ft of
+     slop absorbs a fingertip on a phone without nagging. A bed's reading names
+     the bed and the exact ring it was taken over, so selecting another bed, or
+     redrawing this one, says so. */
+  const measuredFor = measured && measured.measuredFor;
+  const pinMovedFt = (measured && measured.measuredAt && target && target.kind === "pin")
+    ? feetBetween(measured.measuredAt, target) : 0;
+  const staleReason = !measured || !target ? null
+    : target.kind === "bed"
+      ? (!measuredFor || measuredFor.kind !== "bed" || measuredFor.id !== target.id) ? "other"
+        : measuredFor.sig !== target.sig ? "redrawn" : null
+      : measuredFor && measuredFor.kind === "bed" ? "other"
+      : pinMovedFt > 30 ? "moved" : null;
+  const pinMoved = staleReason != null;
 
   const overridden = !!measured && (
     siteElev !== measured.elevFt ||
@@ -1293,13 +1716,16 @@ export default function XericPlantDB() {
         return;
       }
       const at = { lat: geo.lat, lon: geo.lon };
-      const data = { ...geo, ...terrain, measuredAt: at };
+      const data = { ...geo, ...terrain, measuredAt: at, measuredFor: { kind: "pin", ...at } };
       applyMeasurement(data);
       /* Open the map on the geocode, with the planting pin already on it. The
          visitor refines from there rather than starting with an empty map and
-         having to find their own house cold. */
+         having to find their own house cold. A new address is a new property,
+         so the outlines drawn for the last one go with it. */
       setMapView({ lat: geo.lat, lon: geo.lon, z: MAP_Z_DEFAULT });
       setPins({ plant: at, house: null });
+      setBeds([]); setActiveBedId(null); setKeeps([]);
+      setTrace(null); setTraceError(null);
       setPinMode("plant");
       setLookup({ status: "ok", data });
     } catch (err) {
@@ -1313,36 +1739,65 @@ export default function XericPlantDB() {
     }
   };
 
-  /* Re-measure at the planting pin. Same guards as the address path — the range
-     check runs before the three USGS requests, not after them. */
-  const measureAtPin = async () => {
-    const at = pins.plant;
-    if (!at) return;
-    if (outsideCoverage(at.lat, at.lon)) {
+  /* Re-measure at the planting target: the selected bed, or the pin. Same
+     guards as the address path — the range check runs before the three USGS
+     requests, not after them. A bed is read at its area centroid over a radius
+     that contains it, and the reading is kept on the bed with the ring it was
+     taken for. */
+  const measureAtTarget = async () => {
+    const t = target;
+    if (!t) return;
+    const what = t.kind === "bed" ? t.name : "that pin";
+    if (outsideCoverage(t.lat, t.lon)) {
       setLookup(l => ({ ...l, status: "error",
-        message: "That pin is outside Colorado. This database is built for the "
-               + "Southern Rockies, and off that map it would return the residue "
-               + "of a filter rather than a palette." }));
+        message: `${t.kind === "bed" ? t.name : "That pin"} is outside Colorado. `
+               + "This database is built for the Southern Rockies, and off that map "
+               + "it would return the residue of a filter rather than a palette." }));
       return;
     }
+    const radiusM = t.kind === "bed" ? bedRadiusM(bedGeo) : SITE_RULES.analysisRadiusM;
     const keep = measured;
-    setLookup({ status: "loading", phase: "terrain" });
+    setLookup({ status: "loading", phase: "terrain", radiusM,
+                where: t.kind === "bed" ? t.name : "the pin" });
     try {
-      const terrain = await measureTerrain(at.lat, at.lon);
+      const terrain = await measureTerrain(t.lat, t.lon, radiusM);
       if (terrain.elevFt == null) {
-        setLookup({ status: "error", message: "USGS has no elevation at that pin." });
+        setLookup({ status: "error", message: `USGS has no elevation at ${what}.` });
         return;
       }
       /* The geocode fields — matched address, precision, hardiness — describe
          the ADDRESS and survive a pin move. Only the terrain is re-read. */
-      const data = { ...(keep || {}), ...terrain, measuredAt: at };
+      const at = { lat: t.lat, lon: t.lon };
+      const measuredFor = t.kind === "bed"
+        ? { kind: "bed", id: t.id, name: t.name, sig: t.sig, ...at } : { kind: "pin", ...at };
+      const data = { ...(keep || {}), ...terrain, measuredAt: at, measuredFor };
       applyMeasurement(data);
       setLookup({ status: "ok", data });
+      if (t.kind === "bed") {
+        setBeds(bs => bs.map(b => b.id === t.id
+          ? { ...b, reading: { ...terrain, sig: t.sig, readAt: new Date().toISOString() } } : b));
+      }
     } catch (err) {
       setLookup({ status: "error",
         message: (err && err.message ? err.message + ". " : "")
                + "USGS 3DEP is intermittent — try again, or set your site by hand below." });
     }
+  };
+
+  /* Select a bed. One that was measured and has not been redrawn since brings
+     its own reading back at once; any other leaves the stale banner to say the
+     numbers on screen describe somewhere else. */
+  const selectBed = id => {
+    setActiveBedId(id);
+    const b = beds.find(x => x.id === id);
+    const geo = outline[id];
+    if (!b || !b.reading || !geo || !measured || b.reading.sig !== ringSig(b.ring)) return;
+    const { sig, readAt, ...terrain } = b.reading;
+    const at = { lat: geo.lat, lon: geo.lon };
+    const data = { ...measured, ...terrain, measuredAt: at,
+                   measuredFor: { kind: "bed", id, name: b.name, sig, ...at } };
+    applyMeasurement(data);
+    setLookup({ status: "ok", data });
   };
 
   /* ═══════════════════ MAP INTERACTION ═══════════════════
@@ -1495,25 +1950,74 @@ export default function XericPlantDB() {
     if (prev && now - prev.t < 320 &&
         Math.abs(e.clientX - prev.x) < 24 && Math.abs(e.clientY - prev.y) < 24) {
       tapRef.current = null;
+      /* The first tap of the pair already dropped a corner of the outline
+         being traced. It was the start of a zoom, not a corner — take it back. */
+      if (prev.corner) setTrace(t => (t && t.ring.length ? { ...t, ring: t.ring.slice(0, -1) } : t));
       zoomMap(1, fx, fy);
       return;
     }
 
-    mapTapAt(fx, fy);
+    tapRef.current.corner = mapTapAt(fx, fy) === "corner";
   };
 
-  /* What a single tap MEANS depends on what is being marked. The planting pin
-     is a point and always was. The house is a shape, and the mode decides how
-     the visitor describes it — see feetToHouse. */
+  /* What a single tap MEANS depends on what is being marked. A trace in
+     progress takes every tap, whatever else is selected. Otherwise the
+     planting pin is a point until there are beds, and then a tap picks a bed;
+     the house is a shape, and its mode decides how the visitor describes it;
+     a thing to keep is a point, or an outline started from its panel.
+
+     Returns "corner" when the tap became a corner, so that a double-tap can
+     take it back. */
   const mapTapAt = (fx, fy) => {
     const [lat, lon] = mapPointAt(mapView, fx, fy);
+    setTraceError(null);
+
+    if (trace) {
+      /* Tapping the first corner again closes the shape — the gesture every
+         drawing tool teaches — within 14 px, about a fingertip's doubt. */
+      const r = trace.ring;
+      const box = stageBox();
+      if (r.length >= 3 && box) {
+        const [f0x, f0y] = mapFractionOf(mapView, r[0][1], r[0][0]);
+        if (Math.hypot((fx - f0x) * box.width, (fy - f0y) * box.height) < 14) {
+          closeTrace();
+          return "closed";
+        }
+      }
+      /* Rounded as it is taken, to the export's seven places. The website's
+         own area and distance are then computed from exactly the coordinates
+         the file will carry, and geometry.py reads the same numbers back —
+         measured unrounded, a 10 m bed came back 1.6 ft² different. */
+      setTrace(t => ({ ...t, ring: [...t.ring, [r7(lon), r7(lat)]] }));
+      return "corner";
+    }
 
     if (pinMode === "plant") {
+      if (beds.length) {
+        /* The smallest bed containing the tap, as for footprints. Open ground
+           does nothing, rather than moving a pin that is not on screen. */
+        const area = id => (outline[id] ? outline[id].areaM2 : 0);
+        const hit = beds.filter(b => ringContains(b.ring, lat, lon))
+          .sort((a, b) => area(a.id) - area(b.id))[0];
+        if (hit) selectBed(hit.id);
+        return;
+      }
       setPins(pp => ({ ...pp, plant: { lat, lon } }));
       return;
     }
 
-    if (houseMode === "trace") { setTrace(t => [...t, [lon, lat]]); return; }
+    if (pinMode === "keep") {
+      if (keepTool === "point") {
+        const n = ++seqRef.current.keep;
+        setKeeps(ks => [...ks, { id: `k${n}`, name: "", kind: "point", lat: r7(lat), lon: r7(lon) }]);
+      }
+      return;
+    }
+
+    if (houseMode === "trace") {
+      setTrace({ target: "house", ring: [[r7(lon), r7(lat)]] });
+      return "corner";
+    }
 
     if (houseMode === "tap") {
       /* Smallest footprint containing the tap. Smallest, because a house and
@@ -1525,7 +2029,8 @@ export default function XericPlantDB() {
         .sort((a, b) => (a.sqm || 0) - (b.sqm || 0))[0];
       if (hit) {
         setPins(pp => ({ ...pp, house: { kind:"footprint", ring: hit.ring,
-                                         addr: hit.addr, sqm: hit.sqm } }));
+                                         addr: hit.addr, sqm: hit.sqm,
+                                         imageDate: hit.imageDate } }));
       }
       /* A tap on open ground in tap mode does nothing on purpose. Dropping a
          point pin there would silently downgrade a measured envelope to the
@@ -1556,7 +2061,7 @@ export default function XericPlantDB() {
        Called HERE and not inside a setMapView updater. React may invoke an
        updater more than once for a single update, and a setState inside one is
        a side effect that then happens more than once. */
-    setGhost({ z: v.z, tiles: mapTiles(v, 1), layer: mapLayer });
+    setGhost({ z: v.z, tiles: mapTiles(v, mapLayer, 1), layer: mapLayer });
     mapViewRef.current = next;
     setMapView(next);
   };
@@ -1615,17 +2120,19 @@ export default function XericPlantDB() {
      set rather than a timer: a timer either drops the ghost before the tiles
      arrive, which is the beige square again, or holds it long after, which
      leaves a stale layer under a fresh one. */
-  const visibleTiles = useMemo(() => (mapView ? mapTiles(mapView, 0) : []), [mapView]);
+  const visibleTiles = useMemo(() => (mapView ? mapTiles(mapView, mapLayer, 0) : []),
+    [mapView, mapLayer]);
   const visibleReady = visibleTiles.length > 0 &&
     visibleTiles.every(t => loaded[`${mapLayer}:${t.key}`]);
 
-  /* The margin ring joins the render only once the visible four have decoded.
-     Until then `currentTiles` IS the visible set, so nothing competes with it
-     for a connection. Already-cached tiles satisfy this immediately, so a
-     revisit or a zoom back out never waits. */
+  /* The margin ring joins the render only once the visible tiles have decoded —
+     four for a 1024 px layer, about twenty-five for Esri's 256s. Until then
+     `currentTiles` IS the visible set, so nothing competes with it for a
+     connection. Already-cached tiles satisfy this immediately, so a revisit or a
+     zoom back out never waits. */
   const currentTiles = useMemo(
-    () => (mapView ? mapTiles(mapView, visibleReady ? 1 : 0) : []),
-    [mapView, visibleReady]);
+    () => (mapView ? mapTiles(mapView, mapLayer, visibleReady ? 1 : 0) : []),
+    [mapView, mapLayer, visibleReady]);
 
   useEffect(() => {
     if (!ghost || !visibleTiles.length) return;
@@ -1657,15 +2164,169 @@ export default function XericPlantDB() {
     return () => { clearTimeout(t); ctl.abort(); };
   }, [mapView, useHousePin, houseMode]);
 
-  /* Close the traced ring. Three points is the minimum that encloses anything;
-     below that there is no inside and feetToHouse would measure to a line. */
-  const closeTrace = () => {
-    if (trace.length < 3) return;
-    setPins(pp => ({ ...pp, house: { kind:"traced", ring: trace } }));
-    setTrace([]);
+  /* ── when Esri does not answer ──
+     Two tiles failing with none loaded is the layer, not the network blinking:
+     the Worker has no key (it answers 503) or Esri itself is down. The map
+     drops to the 2019 aerial and says so, rather than leaving a grid of broken
+     images. A lapsed or wrong key does NOT land here: measured 2026-09-15,
+     ibasemaps serves real imagery for any token string, junk included, and
+     refuses only a missing one. Renewing the key on time is what keeps the
+     licence; this fallback cannot. */
+  useEffect(() => {
+    if (mapLayer !== "imagery" || tileErrors < 2) return;
+    if (Object.keys(loaded).some(k => k.startsWith("imagery:"))) return;
+    setImageryDown(true);
+    setGhost(null);
+    setMapLayer("naip");
+  }, [tileErrors, mapLayer, loaded]);
+
+  /* What a finished outline was drawn on: the layer, and when that picture was
+     taken wherever the source says. Taken when the shape is closed, not when
+     it is exported, because the visitor may switch layers in between and the
+     office needs to know which picture the line was actually following. Esri's
+     licensed tile host publishes no capture date — worker/map-tile.js says
+     why — so none is claimed for it. */
+  const tracedOn = () => {
+    if (mapLayer === "imagery") {
+      return { layer: "imagery", source: "Esri World Imagery" };
+    }
+    if (mapLayer === "naip") {
+      return { layer: "naip", source: "USGS NAIP Plus",
+               captured: (measured && measured.imageryYear) || null };
+    }
+    return { layer: mapLayer, source: "USGS 3DEP hillshade" };
   };
 
-  const clearHouse = () => { setPins(pp => ({ ...pp, house:null })); setTrace([]); };
+  /* Close the traced ring — refused, with the reason on screen, when it is not
+     a shape anything can be measured from. Under three distinct corners encloses
+     nothing; an outline that crosses itself has no single inside; and a sliver
+     under the pipeline's own threshold is a slip, not a bed. */
+  const closeTrace = () => {
+    if (!trace) return;
+    const ring = dedupeRing(trace.ring);
+    if (ring.length < 3) {
+      setTraceError("An outline needs at least three corners.");
+      return;
+    }
+    if (ringSelfCrosses(ring)) {
+      setTraceError("The outline crosses itself. Undo back past the crossing and go round the other way.");
+      return;
+    }
+    if (ringAreaM2(ring) < GEO.minAreaM2) {
+      setTraceError(`That encloses less than ${GEO.minAreaM2} m², which is a slip rather than a bed. Undo and trace it again.`);
+      return;
+    }
+    const on = tracedOn();
+    if (trace.target === "house") {
+      setPins(pp => ({ ...pp, house: { kind: "traced", ring, tracedOn: on } }));
+    } else if (trace.target === "bed") {
+      const redraw = trace.redrawId;
+      if (redraw) {
+        setBeds(bs => bs.map(b => (b.id === redraw ? { ...b, ring, tracedOn: on, reading: null } : b)));
+      } else {
+        const n = ++seqRef.current.bed;
+        const id = `b${n}`;
+        setBeds(bs => [...bs, { id, name: `Bed ${n}`, ring, note: "", light: "", tracedOn: on }]);
+        setActiveBedId(id);
+      }
+    } else {
+      const n = ++seqRef.current.keep;
+      setKeeps(ks => [...ks, { id: `k${n}`, name: "", kind: "ring", ring }]);
+    }
+    setTrace(null);
+    setTraceError(null);
+  };
+
+  const startTrace = (target, redrawId) => {
+    setTrace({ target, ring: [], redrawId });
+    setTraceError(null);
+  };
+
+  /* Switching what is being marked abandons a trace in progress: a half-drawn
+     house must not quietly become a bed. */
+  const switchMark = mode => {
+    setPinMode(mode);
+    setTrace(null);
+    setTraceError(null);
+  };
+
+  const updateBed = (id, patch) => setBeds(bs => bs.map(b => (b.id === id ? { ...b, ...patch } : b)));
+  const deleteBed = id => {
+    setBeds(bs => bs.filter(b => b.id !== id));
+    if (activeBedId === id) setActiveBedId(null);
+    if (trace && trace.redrawId === id) setTrace(null);
+  };
+  const renameKeep = (id, name) => setKeeps(ks => ks.map(k => (k.id === id ? { ...k, name } : k)));
+  const deleteKeep = id => setKeeps(ks => ks.filter(k => k.id !== id));
+
+  const clearHouse = () => {
+    setPins(pp => ({ ...pp, house: null }));
+    if (trace && trace.target === "house") setTrace(null);
+  };
+
+  /* The drawing, as the export files carry it. The measurements in it are the
+     website's first pass and say so; the pipeline recomputes every one of them
+     from the outlines. They are there for whoever reads the file, person or
+     agent. A bed's terrain is included only when it was read over the bed as
+     it now stands. */
+  const buildOutline = () => ({
+    drawnAt: new Date().toISOString().slice(0, 10),
+    house: useHousePin ? pins.house : null,
+    beds: beds.map(b => {
+      const g = outline[b.id] || {};
+      const z = g.fromStructureFt != null ? zoneForDistance(g.fromStructureFt) : null;
+      const r = b.reading && b.reading.sig === ringSig(b.ring) ? b.reading : null;
+      const applied = r && r.aspectCoherence != null &&
+        r.aspectCoherence >= SITE_RULES.aspectCoherence.incoherent ? r.aspectDeg : null;
+      const eff = r && r.elevFt != null ? effectiveElevation(r.elevFt, applied, r.slopePct || 0) : null;
+      return {
+        ...b, geo: g,
+        zone: z ? z.name : null, minIgn: z ? z.minIgn : null,
+        terrain: r ? {
+          elevFt: r.elevFt, slopeDeg: r.slopeDeg, slopePct: r.slopePct,
+          aspectDeg: r.aspectDeg, aspectCoherence: r.aspectCoherence,
+          effectiveElevFt: eff ? eff.ft : null, radiusM: r.radiusM,
+          source: "USGS 3DEP", readAt: r.readAt,
+        } : null,
+      };
+    }),
+    keeps,
+  });
+
+  /* Built in the browser and handed straight to it — the same pattern as the
+     CSV export. Nothing is sent anywhere, and neither file carries the address. */
+  const downloadOutline = fmt => {
+    const doc = buildOutline();
+    const text = fmt === "kml" ? outlineKml(doc) : JSON.stringify(outlineGeoJson(doc), null, 2);
+    const type = fmt === "kml" ? "application/vnd.google-earth.kml+xml" : "application/geo+json";
+    const url = URL.createObjectURL(new Blob([text], { type }));
+    const a = document.createElement("a");
+    a.href = url; a.download = `nextsteppe-outline-${doc.drawnAt}.${fmt === "kml" ? "kml" : "geojson"}`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  /* The controls for an outline being drawn, whatever it will become. Called
+     as a function, like Sidebar and SitePanel, so its buttons are part of this
+     component's tree rather than a component React remounts every render. */
+  const TraceControls = () => {
+    const n = trace.ring.length;
+    const area = n >= 3 ? ringAreaM2(trace.ring) / M2_PER_FT2 : null;
+    const what = trace.target === "house" ? "the house" : trace.target === "bed" ? "the bed" : "it";
+    return (
+      <div className="xpdb-trace-controls">
+        <p className="xpdb-map-tip">
+          Tap each corner of {what}, then close the shape — or tap the first corner again.
+          {n > 0 && <> {n} corner{n === 1 ? "" : "s"}
+            {area != null && <>, about {Math.round(area).toLocaleString()} ft²</>} so far.</>}
+        </p>
+        <button type="button" onClick={closeTrace} disabled={n < 3}>Close the shape</button>
+        <button type="button" onClick={() => setTrace(t => ({ ...t, ring: t.ring.slice(0, -1) }))}
+          disabled={!n}>Undo corner</button>
+        <button type="button" onClick={() => { setTrace(null); setTraceError(null); }}>Cancel</button>
+      </div>
+    );
+  };
 
   const SitePanel = () => {
     const band = bandForPct(siteSlopePct);
@@ -1712,7 +2373,7 @@ export default function XericPlantDB() {
             {lookup.status === "loading" && (
               <p className="xpdb-site-prov" role="status">
                 {lookup.phase === "terrain"
-                  ? `Reading the terrain from USGS 3DEP — elevation, slope and aspect over ${SITE_RULES.analysisRadiusM} m around the pin. This takes a few seconds, and longer when the service is busy.`
+                  ? `Reading the terrain from USGS 3DEP — elevation, slope and aspect over ${lookup.radiusM || SITE_RULES.analysisRadiusM} m around ${lookup.where || "the pin"}. This takes a few seconds, and longer when the service is busy.`
                   : "Finding the address…"}
               </p>
             )}
@@ -1826,10 +2487,12 @@ export default function XericPlantDB() {
                         /* Hold the outgoing layer underneath while the incoming
                            one loads. Swapping src on the same <img> blanks it,
                            so without this a layer switch is the beige square
-                           that the zoom fix just removed. */
+                           that the zoom fix just removed. Choosing Esri again
+                           after it failed gives it a fresh chance. */
                         onClick={() => {
                           if (k === mapLayer) return;
-                          setGhost({ z: mapView.z, tiles: mapTiles(mapView, 1), layer: mapLayer });
+                          setGhost({ z: mapView.z, tiles: mapTiles(mapView, mapLayer, 1), layer: mapLayer });
+                          if (k === "imagery") { setTileErrors(0); setImageryDown(false); }
                           setMapLayer(k);
                         }}
                         className={mapLayer === k ? "on" : ""}>{l.label}</button>
@@ -1863,7 +2526,7 @@ export default function XericPlantDB() {
                   {ghost && (
                     <div className="xpdb-map-ghost" aria-hidden="true">
                       {ghost.tiles.map(t => {
-                        const g = ghostPlacement(mapView, t);
+                        const g = tilePlacement(mapView, t);
                         return (
                           <img key={t.key} src={mapTileUrl(t, ghost.layer)} alt=""
                             draggable="false" className="xpdb-tile"
@@ -1877,14 +2540,18 @@ export default function XericPlantDB() {
                   {/* The tile layer. Keyed by z/x/y and NOT by position, which
                       is what lets React keep the same <img> across a pan — the
                       browser never re-decodes, and a pan inside the margin
-                      touches the network not at all. */}
+                      touches the network not at all. A tile is a stage wide for
+                      a 1024 px layer and a quarter of one for Esri's pyramid, or
+                      wider than the stage where the last real level is being
+                      stretched. */}
                   <div className="xpdb-map-tiles" ref={mapLayerRef}>
                     {currentTiles.map(t => (
                       <img key={t.key} className="xpdb-tile" draggable="false" alt=""
                         src={mapTileUrl(t, mapLayer)}
                         onLoad={() => setLoaded(l => ({ ...l, [`${mapLayer}:${t.key}`]: true }))}
+                        onError={() => { if (mapLayer === "imagery") setTileErrors(n => n + 1); }}
                         style={{ left:`${t.left * 100}%`, top:`${t.top * 100}%`,
-                                 width:"100%", height:"100%" }} />
+                                 width:`${t.size * 100}%`, height:`${t.size * 100}%` }} />
                     ))}
                   </div>
 
@@ -1922,27 +2589,61 @@ export default function XericPlantDB() {
                     </svg>
                   )}
 
-                  {/* A trace in progress: the vertices so far, and the line
-                      between them. Shown open, because it is open. */}
-                  {useHousePin && houseMode === "trace" && trace.length > 0 && (
-                    <svg className="xpdb-map-trace" viewBox="0 0 1 1" preserveAspectRatio="none"
+                  {/* ── the beds and the things to keep ──
+                      The same fractional SVG space as the footprints, so they
+                      pan and zoom with the tiles. The selected bed is drawn
+                      heavier: it is the one the list is tuned to. */}
+                  {beds.length > 0 && (
+                    <svg className="xpdb-map-beds" viewBox="0 0 1 1" preserveAspectRatio="none"
                       aria-hidden="true">
-                      <polyline points={trace
+                      {beds.map(b => (
+                        <polygon key={b.id}
+                          className={activeBed && b.id === activeBed.id ? "active" : ""}
+                          points={b.ring
+                            .map(([lon, lat]) => mapFractionOf(mapView, lat, lon))
+                            .map(([x, y]) => `${x},${y}`).join(" ")} />
+                      ))}
+                    </svg>
+                  )}
+                  {keeps.some(k => k.kind === "ring") && (
+                    <svg className="xpdb-map-keeps" viewBox="0 0 1 1" preserveAspectRatio="none"
+                      aria-hidden="true">
+                      {keeps.filter(k => k.kind === "ring").map(k => (
+                        <polygon key={k.id} points={k.ring
+                          .map(([lon, lat]) => mapFractionOf(mapView, lat, lon))
+                          .map(([x, y]) => `${x},${y}`).join(" ")} />
+                      ))}
+                    </svg>
+                  )}
+
+                  {/* A trace in progress: the corners so far and the line
+                      between them, in the colour of what it will become. Shown
+                      open, because it is open; the first corner grows once the
+                      shape can be closed by tapping it again. */}
+                  {trace && trace.ring.length > 0 && (
+                    <svg className={`xpdb-map-trace target-${trace.target}`} viewBox="0 0 1 1"
+                      preserveAspectRatio="none" aria-hidden="true">
+                      <polyline points={trace.ring
                         .map(([lon, lat]) => mapFractionOf(mapView, lat, lon))
                         .map(([x, y]) => `${x},${y}`).join(" ")} />
-                      {trace.map(([lon, lat], i) => {
+                      {trace.ring.map(([lon, lat], i) => {
                         const [x, y] = mapFractionOf(mapView, lat, lon);
-                        return <circle key={i} cx={x} cy={y} r="0.008" />;
+                        const first = i === 0 && trace.ring.length >= 3;
+                        return <circle key={i} cx={x} cy={y} r={first ? "0.016" : "0.008"}
+                          className={first ? "first" : ""} />;
                       })}
                     </svg>
                   )}
 
                   {/* ── the pins ──
-                      The planting pin is a point. The house glyph marks the
-                      centroid of whatever shape was given, and is hidden when a
-                      ring is drawn — the outline already says where the house
-                      is, and better than a symbol in the middle of it can. */}
-                  {pins.plant && (() => {
+                      The planting pin is a point, and stands down once there
+                      are beds: the outlines say where the planting is, and a
+                      pin left among them would read as a second answer. The
+                      house glyph marks the centroid of whatever shape was
+                      given, and is hidden when a ring is drawn — the outline
+                      already says where the house is, and better than a symbol
+                      in the middle of it can. */}
+                  {pins.plant && !beds.length && (() => {
                     const [fx, fy] = mapFractionOf(mapView, pins.plant.lat, pins.plant.lon);
                     if (fx < 0 || fx > 1 || fy < 0 || fy > 1) return null;
                     return (
@@ -1951,6 +2652,41 @@ export default function XericPlantDB() {
                         title="Where you are planting">✽</span>
                     );
                   })()}
+
+                  {/* Each bed's name sits at its area centroid, which is also
+                      where its terrain is read from. */}
+                  {beds.map(b => {
+                    const g = outline[b.id];
+                    if (!g) return null;
+                    const [fx, fy] = mapFractionOf(mapView, g.lat, g.lon);
+                    if (fx < 0 || fx > 1 || fy < 0 || fy > 1) return null;
+                    return (
+                      <span key={b.id}
+                        className={`xpdb-bed-label${activeBed && b.id === activeBed.id ? " active" : ""}`}
+                        style={{ left:`${fx * 100}%`, top:`${fy * 100}%` }}>{b.name}</span>
+                    );
+                  })}
+                  {keeps.map(k => {
+                    const a = k.kind === "point" ? { lat: k.lat, lon: k.lon } : houseAnchor({ ring: k.ring });
+                    const [fx, fy] = mapFractionOf(mapView, a.lat, a.lon);
+                    if (fx < 0 || fx > 1 || fy < 0 || fy > 1) return null;
+                    if (k.kind !== "point" && !k.name) return null;
+                    return (
+                      <span key={k.id} className="xpdb-keep-pt"
+                        style={{ left:`${fx * 100}%`, top:`${fy * 100}%` }}
+                        title={k.name || "Something to keep"}>
+                        {k.kind === "point" && "◇"}
+                        {k.name && <span className="xpdb-keep-label">{k.name}</span>}
+                      </span>
+                    );
+                  })}
+
+                  {/* Esri's attribution belongs on the map while its picture
+                      is: "Powered by Esri" here, and whose imagery it is in the
+                      caption underneath. */}
+                  {mapLayer === "imagery" && (
+                    <div className="xpdb-map-attrib">Powered by Esri</div>
+                  )}
                   {useHousePin && pins.house && !pins.house.ring && (() => {
                     const a = houseAnchor(pins.house);
                     const [fx, fy] = mapFractionOf(mapView, a.lat, a.lon);
@@ -1965,23 +2701,138 @@ export default function XericPlantDB() {
 
                 <div className="xpdb-map-controls">
                   <div className="xpdb-map-which">
-                    <button type="button" onClick={() => setPinMode("plant")}
+                    <button type="button" onClick={() => switchMark("plant")}
                       className={pinMode === "plant" ? "on" : ""}>✽ Planting area</button>
                     {useHousePin && (
-                      <button type="button" onClick={() => setPinMode("house")}
+                      <button type="button" onClick={() => switchMark("house")}
                         className={pinMode === "house" ? "on" : ""}>⌂ House</button>
                     )}
+                    <button type="button" onClick={() => switchMark("keep")}
+                      className={pinMode === "keep" ? "on" : ""}>◇ Keep</button>
                   </div>
                   <label className="xpdb-map-two">
                     <input type="checkbox" checked={useHousePin}
                       onChange={e => {
                         setUseHousePin(e.target.checked);
-                        setPinMode(e.target.checked ? "house" : "plant");
+                        switchMark(e.target.checked ? "house" : "plant");
                         if (!e.target.checked) clearHouse();
                       }} />
                     <span>Also mark the house</span>
                   </label>
                 </div>
+
+                {/* ── the planting area ──
+                    Until a bed is drawn the ✽ pin is the planting area, as it
+                    always was. Once there are beds the list is tuned to the
+                    selected one: its nearest edge picks the fire band, and its
+                    terrain is read over the bed itself. */}
+                {pinMode === "plant" && (
+                  <div className="xpdb-bed-panel">
+                    {trace && trace.target === "bed" ? TraceControls() : beds.length === 0 ? (
+                      <div className="xpdb-trace-controls">
+                        <p className="xpdb-map-tip">
+                          Tap to move the planting pin — or trace your bed, and
+                          the reading, the area and the distance to the house all
+                          come from its outline.
+                        </p>
+                        <button type="button" onClick={() => startTrace("bed")}>Trace a bed</button>
+                      </div>
+                    ) : (
+                      <>
+                        <ul className="xpdb-bed-list">
+                          {beds.map(b => {
+                            const g = outline[b.id] || {};
+                            const z = g.fromStructureFt != null ? zoneForDistance(g.fromStructureFt) : null;
+                            const on = activeBed && b.id === activeBed.id;
+                            return (
+                              <li key={b.id} className={on ? "on" : ""}>
+                                <button type="button" className="xpdb-bed-pick" aria-pressed={!!on}
+                                  onClick={() => selectBed(b.id)}>
+                                  <b>{b.name}</b>
+                                  {g.areaFt2 != null && <> · {Math.round(g.areaFt2).toLocaleString()} ft²</>}
+                                  {z && <> · {Math.round(g.fromStructureFt)} ft · {z.name}</>}
+                                </button>
+                                <button type="button" onClick={() => startTrace("bed", b.id)}>Redraw</button>
+                                <button type="button" onClick={() => deleteBed(b.id)}>Delete</button>
+                                {on && (
+                                  <div className="xpdb-bed-fields">
+                                    <label>
+                                      <span>Note</span>
+                                      <input type="text" value={b.note}
+                                        placeholder="the strip along the front walk"
+                                        onChange={e => updateBed(b.id, { note: e.target.value })} />
+                                    </label>
+                                    <label>
+                                      <span>Light</span>
+                                      <select value={b.light}
+                                        onChange={e => updateBed(b.id, { light: e.target.value })}>
+                                        <option value="">Not sure</option>
+                                        {Object.keys(SITE_RULES.sunLevels).map(k => (
+                                          <option key={k} value={k}>{k}</option>
+                                        ))}
+                                      </select>
+                                    </label>
+                                  </div>
+                                )}
+                              </li>
+                            );
+                          })}
+                        </ul>
+                        <p className="xpdb-map-tip">
+                          Tap a bed to select it. Describe each in words — a
+                          rendering reads words, not measurements. Light is what
+                          you see standing there: it travels with the bed, and
+                          this list does not filter on it.
+                        </p>
+                        <div className="xpdb-trace-controls">
+                          <button type="button" onClick={() => startTrace("bed")}>Trace another bed</button>
+                        </div>
+                      </>
+                    )}
+                    {traceError && <p className="xpdb-map-stale">{traceError}</p>}
+                  </div>
+                )}
+
+                {/* ── things to keep ──
+                    A tree, a boulder, a path: what the planting must leave
+                    alone. Recorded and exported for whoever designs and renders
+                    the beds; nothing here tunes the list. */}
+                {pinMode === "keep" && (
+                  <div className="xpdb-keep-panel">
+                    <div className="xpdb-map-which">
+                      {[["point", "A point"], ["ring", "An outline"]].map(([k, label]) => (
+                        <button key={k} type="button" className={keepTool === k ? "on" : ""}
+                          onClick={() => { setKeepTool(k); setTrace(null); setTraceError(null); }}>
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    {trace && trace.target === "keep" ? TraceControls() : keepTool === "point" ? (
+                      <p className="xpdb-map-tip">
+                        Tap a tree, a boulder — anything the planting must leave alone.
+                      </p>
+                    ) : (
+                      <div className="xpdb-trace-controls">
+                        <p className="xpdb-map-tip">Outline a path, a patio or a lawn to keep.</p>
+                        <button type="button" onClick={() => startTrace("keep")}>Trace it</button>
+                      </div>
+                    )}
+                    {keeps.length > 0 && (
+                      <ul className="xpdb-keep-list">
+                        {keeps.map(k => (
+                          <li key={k.id}>
+                            <span aria-hidden="true">{k.kind === "point" ? "◇" : "▱"}</span>
+                            <input type="text" value={k.name} aria-label="What to keep"
+                              placeholder="name it — the aspen clump"
+                              onChange={e => renameKeep(k.id, e.target.value)} />
+                            <button type="button" onClick={() => deleteKeep(k.id)}>Delete</button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {traceError && <p className="xpdb-map-stale">{traceError}</p>}
+                  </div>
+                )}
 
                 {/* ── how the house gets marked ──
                     Only while the house is the active mark. Three ways, and the
@@ -1993,7 +2844,7 @@ export default function XericPlantDB() {
                       {[["tap", "Tap the building"], ["trace", "Trace it"], ["point", "Just a pin"]]
                         .map(([k, label]) => (
                           <button key={k} type="button"
-                            onClick={() => { setHouseMode(k); setTrace([]); }}
+                            onClick={() => { setHouseMode(k); setTrace(null); setTraceError(null); }}
                             className={houseMode === k ? "on" : ""}>{label}</button>
                         ))}
                     </div>
@@ -2016,19 +2867,12 @@ export default function XericPlantDB() {
                       </p>
                     )}
 
-                    {houseMode === "trace" && (
-                      <div className="xpdb-trace-controls">
-                        <p className="xpdb-map-tip">
-                          Tap each corner of the house, then close the shape.
-                          {trace.length > 0 && <> {trace.length} corner{trace.length === 1 ? "" : "s"} so far.</>}
-                        </p>
-                        <button type="button" onClick={closeTrace} disabled={trace.length < 3}>
-                          Close the shape
-                        </button>
-                        <button type="button" onClick={() => setTrace(t => t.slice(0, -1))}
-                          disabled={!trace.length}>Undo corner</button>
-                      </div>
-                    )}
+                    {houseMode === "trace" && (trace && trace.target === "house" ? TraceControls() : (
+                      <p className="xpdb-map-tip">
+                        Tap the first corner of the house to start, then each corner after it.
+                      </p>
+                    ))}
+                    {traceError && <p className="xpdb-map-stale">{traceError}</p>}
 
                     {houseMode === "point" && (
                       <p className="xpdb-map-tip">
@@ -2046,12 +2890,18 @@ export default function XericPlantDB() {
                               {pins.house.addr ? <> of {pins.house.addr.toLowerCase()}</> : null}
                               {pins.house.sqm ? <> ({Math.round(pins.house.sqm)} m²)</> : null}.
                               That outline is a <b>roofline</b> traced from aerial
-                              imagery, so it follows the eaves — a foot or three
-                              outside the foundation, which is the safe direction
-                              for a defensible-space band.</>
+                              imagery{pins.house.imageDate
+                                ? <> taken in {pins.house.imageDate.slice(0, 4)}</> : null},
+                              so it follows the eaves — a foot or three outside the
+                              foundation, which is the safe direction for a
+                              defensible-space band. If the house has changed since,
+                              trace it instead.</>
                           : pins.house.kind === "traced"
                           ? <>Measuring to the outline you drew, {pins.house.ring.length} corners.</>
-                          : <>Measuring to a single point.</>}
+                          : <>Measuring to a single point. A point is not an outline,
+                              so the exported file carries it as a point and a site
+                              analysis cannot measure from it — tap or trace the
+                              house for that.</>}
                         {" "}
                         <button type="button" className="xpdb-linkish" onClick={clearHouse}>
                           Clear
@@ -2064,36 +2914,67 @@ export default function XericPlantDB() {
                 <p className="xpdb-map-tip">
                   Drag to pan. Scroll, pinch or double-tap to zoom — the point
                   under the cursor stays put.{" "}
-                  {pinMode === "plant"
-                    ? <>Tap to place the <b>planting</b> pin.</>
+                  {trace
+                    ? <>Tap to add a corner.</>
+                    : pinMode === "plant"
+                    ? (beds.length ? <>Tap a bed to select it.</> : <>Tap to place the <b>planting</b> pin.</>)
+                    : pinMode === "keep"
+                    ? (keepTool === "point" ? <>Tap to mark something to <b>keep</b>.</> : null)
                     : <>Tap to mark the <b>house</b>.</>}{" "}
                   {MAP_LAYERS[mapLayer].credit}
                   {/* CC BY 4.0 requires the credit, and it only appears while
                       the layer it describes is actually on screen. */}
                   {useHousePin && houseMode === "tap" && footprints.list.length > 0
                     && <>, building outlines FEMA/ORNL USA Structures (CC BY 4.0)</>}
-                  {/* Only the aerial has a survey date worth stating. The
-                      hillshade is terrain, and terrain does not go out of date
-                      the way a roofline does. */}
-                  {mapLayer === "aerial" && measured && measured.imageryYear
+                  {/* A picture's date is worth stating: a visitor reads an
+                      aerial as current unless told otherwise. The hillshade is
+                      terrain, and terrain does not go out of date the way a
+                      roofline does. */}
+                  {mapLayer === "imagery"
+                    && <>; capture dates vary across the valley, and anything planted
+                       since will not be in it</>}
+                  {mapLayer === "naip" && measured && measured.imageryYear
                     && <>, flown {measured.imageryYear} — anything planted since
                        will not be in it</>}.
                 </p>
+                {imageryDown && mapLayer === "naip" && (
+                  <p className="xpdb-map-stale">
+                    The sharper Esri aerial is not answering right now, so this is
+                    the 2019 USGS picture. Choose Aerial above to try it again.
+                  </p>
+                )}
 
-                {/* The distance is measured once both pins are down, so the
-                    band stops being a question. */}
+                {/* The distance is measured once the house is marked, so the
+                    band stops being a question — from the selected bed's
+                    nearest edge, or from the pin while there is no bed. */}
                 {useHousePin && pinDistFt != null && (
                   <p className="xpdb-map-dist">
                     <b>{Math.round(pinDistFt)} ft</b>{" "}
+                    {activeBed ? <>from {activeBed.name}'s nearest edge to </> : <>from </>}
                     {pins.house && pins.house.ring
-                      ? <>from the nearest wall</>
-                      : <>from the house pin</>} — {siteZone.name}
+                      ? <>the nearest wall</>
+                      : <>the house pin</>} — {siteZone.name}
                     {siteZone.minIgn != null && <>, ignitability {siteZone.minIgn}+ only</>}.
                     {/* The band edge is the whole point of measuring to the
                         wall rather than to the middle: HIZ 0 is five feet wide
                         and a centre-of-roof pin cannot resolve it at all. */}
-                    {pinDistFt === 0 && <> That is inside the outline — move the
-                      planting pin outside the house.</>}
+                    {pinDistFt === 0 && (activeBed
+                      ? <> {activeBed.name} overlaps the house outline — redraw it
+                          outside the walls.</>
+                      : <> That is inside the outline — move the planting pin
+                          outside the house.</>)}
+                    {/* One bed, one band: the site analysis composes a bed from
+                        its nearest approach, so a bed that reaches into a wider
+                        band is still held to the strictest one it touches. */}
+                    {(() => {
+                      if (!activeBed || !bedGeo || bedGeo.farFt == null || pinDistFt === 0) return null;
+                      const far = zoneForDistance(bedGeo.farFt);
+                      if (far.name === siteZone.name) return null;
+                      return <> {activeBed.name} reaches {Math.round(bedGeo.farFt)} ft out,
+                        into {far.name}. A site analysis holds the whole bed to the
+                        strictest band it touches, and so does this list; split it at
+                        the {siteZone.toFt} ft line to give the rest its own palette.</>;
+                    })()}
                   </p>
                 )}
                 {useHousePin && pinDistFt == null && (
@@ -2107,18 +2988,47 @@ export default function XericPlantDB() {
                     reading must never sit quietly beside a moved pin. */}
                 {pinMoved && (
                   <p className="xpdb-map-stale">
-                    The pin has moved {Math.round(pinMovedFt)} ft from where these
-                    numbers were read. Aspect changes faster than most people expect
-                    across a property — measure again to tune to the new spot.
+                    {staleReason === "moved"
+                      ? <>The pin has moved {Math.round(pinMovedFt)} ft from where these
+                          numbers were read. Aspect changes faster than most people expect
+                          across a property — measure again to tune to the new spot.</>
+                      : staleReason === "redrawn"
+                      ? <>{target.name} has been redrawn since it was measured — measure
+                          again so the numbers describe the bed as it is now.</>
+                      : <>These numbers were read {measuredFor && measuredFor.kind === "bed"
+                          ? <>over {measuredFor.name}</> : <>at the pin</>}, and{" "}
+                          {target.kind === "bed" ? target.name : "the pin"} is selected —
+                          measure again to tune the list to it.</>}
                   </p>
                 )}
 
                 <button type="button" className="xpdb-map-measure"
-                  onClick={measureAtPin}
-                  disabled={lookup.status === "loading" || !pins.plant}>
+                  onClick={measureAtTarget}
+                  disabled={lookup.status === "loading" || !target}>
                   {lookup.status === "loading" ? "Measuring…"
-                    : pinMoved ? "Measure at the pin" : "Measure here again"}
+                    : target && target.kind === "bed"
+                      ? (pinMoved ? `Measure ${target.name}` : `Measure ${target.name} again`)
+                      : pinMoved ? "Measure at the pin" : "Measure here again"}
                 </button>
+
+                {/* ── the export ──
+                    What was drawn, as files the office can use: GeoJSON for the
+                    plant system's geometry.py, with every kind declared, and KML
+                    for Google Earth. Built in the browser and sent nowhere. */}
+                {(beds.length > 0 || keeps.length > 0 || (useHousePin && pins.house)) && (
+                  <div className="xpdb-export">
+                    <button type="button" onClick={() => downloadOutline("geojson")}>
+                      Download for NextSteppe (GeoJSON)
+                    </button>
+                    <button type="button" onClick={() => downloadOutline("kml")}>
+                      Open in Google Earth (KML)
+                    </button>
+                    <p className="xpdb-map-tip">
+                      Made in your browser from what you drew — nothing is sent
+                      anywhere, and the file carries no address.
+                    </p>
+                  </div>
+                )}
               </div>
             )}
 
@@ -2169,9 +3079,9 @@ export default function XericPlantDB() {
                   How far from the house?{" "}
                   {pinDistFt == null
                     ? <span className="xpdb-site-onlyask">the one thing no dataset knows</span>
-                    : <span className="xpdb-site-onlyask">measured from your two pins</span>}
+                    : <span className="xpdb-site-onlyask">measured from your map</span>}
                 </div>
-                {/* Two pins answer this, so the buttons go rather than sitting
+                {/* The map answers this, so the buttons go rather than sitting
                     there implying a choice that no longer has an effect. */}
                 {pinDistFt == null ? (
                   <div className="xpdb-site-row">
@@ -2187,9 +3097,10 @@ export default function XericPlantDB() {
                   </div>
                 ) : (
                   <p className="xpdb-site-prov">
-                    <b>{Math.round(pinDistFt)} ft</b> between the house pin and the
-                    planting pin — {siteZone.name}. Clear the house pin above to set
-                    this by hand instead.
+                    <b>{Math.round(pinDistFt)} ft</b>{" "}
+                    {activeBed ? <>from {activeBed.name} to the house</>
+                               : <>between the house and the planting pin</>} — {siteZone.name}.
+                    Untick "Also mark the house" on the map to set this by hand instead.
                   </p>
                 )}
               </div>
@@ -2199,6 +3110,15 @@ export default function XericPlantDB() {
               {siteZone.minIgn == null && siteZone.fromFt === 0 ? (
                 <p className="xpdb-site-nope">
                   <b>Nothing is planted here.</b> {siteZone.note}
+                  {/* A bed says which edge put it here, because the fix is to
+                      move that edge, not to abandon the bed. */}
+                  {activeBed && pinDistFt != null && (pinDistFt === 0
+                    ? <> {activeBed.name} overlaps the house outline — redraw it
+                        outside the walls.</>
+                    : <> {activeBed.name}'s nearest edge is {Math.round(pinDistFt)} ft
+                        from the wall, inside the first {siteZone.toFt} ft. Pull that
+                        edge back to {siteZone.toFt} ft, keep the strip as gravel, and
+                        redraw the bed.</>)}
                 </p>
               ) : (
                 <>
@@ -2717,8 +3637,15 @@ export default function XericPlantDB() {
           padding: .6rem; border: 1px solid ${C.border}; background: ${C.bg};
           max-width: 34rem;
         }
-        .xpdb-map-head { display: flex; justify-content: space-between; align-items: center; gap: .5rem; }
-        .xpdb-map-layers, .xpdb-map-zoom, .xpdb-map-which { display: flex; gap: .25rem; align-items: center; }
+        /* Three layers, three marks and a zoom readout do not fit one row on a
+           phone, so every button row wraps rather than running off the stage. */
+        .xpdb-map-head {
+          display: flex; justify-content: space-between; align-items: center;
+          gap: .5rem; flex-wrap: wrap;
+        }
+        .xpdb-map-layers, .xpdb-map-zoom, .xpdb-map-which {
+          display: flex; gap: .25rem; align-items: center; flex-wrap: wrap;
+        }
         .xpdb-map-layers button, .xpdb-map-which button, .xpdb-map-zoom button {
           padding: .2rem .5rem; cursor: pointer; font: 500 .75rem/1.4 inherit;
           border: 1px solid ${C.border}; background: #fff; color: ${C.text}; border-radius: 3px;
@@ -2769,10 +3696,81 @@ export default function XericPlantDB() {
            viewBox, so they pan and zoom with the tiles without any per-shape
            arithmetic. non-scaling-stroke keeps the outlines one weight at every
            zoom; without it a stroke in a 0..1 space renders invisibly thin. */
-        .xpdb-map-fp, .xpdb-map-house, .xpdb-map-trace {
+        .xpdb-map-fp, .xpdb-map-house, .xpdb-map-trace, .xpdb-map-beds, .xpdb-map-keeps {
           position: absolute; inset: 0; z-index: 2;
           pointer-events: none; overflow: visible;
         }
+        /* Beds in the planting green and the house in the accent — the pair the
+           ✽ and ⌂ glyphs have always used — with the selected bed heavier,
+           because it is the one the list is tuned to. */
+        .xpdb-map-beds polygon {
+          fill: ${C.primary}26; stroke: ${C.primary}; stroke-width: 1.5px;
+          vector-effect: non-scaling-stroke; paint-order: stroke;
+        }
+        .xpdb-map-beds polygon.active { fill: ${C.primary}4d; stroke-width: 3px; }
+        /* Things to keep in a pale dashed line: present, and not for planting. */
+        .xpdb-map-keeps polygon {
+          fill: #ffffff26; stroke: #f7f3ea; stroke-width: 1.5px;
+          stroke-dasharray: 3 3; vector-effect: non-scaling-stroke;
+        }
+        .xpdb-map-trace.target-bed polyline { stroke: ${C.primary}; }
+        .xpdb-map-trace.target-bed circle { fill: ${C.primary}; }
+        .xpdb-map-trace.target-keep polyline { stroke: #f7f3ea; }
+        .xpdb-map-trace.target-keep circle { fill: #f7f3ea; }
+        .xpdb-map-trace circle.first {
+          stroke: #fff; stroke-width: 2px; vector-effect: non-scaling-stroke;
+        }
+
+        /* Names on the map, white on a dark halo so they read over snow and
+           shadow alike. */
+        .xpdb-bed-label, .xpdb-keep-pt {
+          position: absolute; transform: translate(-50%, -50%); z-index: 3;
+          pointer-events: none; white-space: nowrap; color: #fff;
+          font-weight: 600; font-size: .68rem; line-height: 1.1;
+          text-shadow: 0 0 3px #000, 0 0 2px #000, 0 0 1px #000;
+        }
+        .xpdb-bed-label.active { font-size: .76rem; }
+        .xpdb-keep-pt { font-size: .95rem; display: flex; flex-direction: column; align-items: center; }
+        .xpdb-keep-label { font-size: .64rem; }
+        .xpdb-map-attrib {
+          position: absolute; right: 0; bottom: 0; z-index: 4; pointer-events: none;
+          padding: 1px 5px; font-size: .6rem; line-height: 1.4;
+          color: ${C.text}; background: rgba(255, 255, 255, .75);
+        }
+
+        /* ── beds and things to keep ── */
+        .xpdb-bed-panel, .xpdb-keep-panel {
+          display: flex; flex-direction: column; gap: 6px; margin-top: 6px;
+        }
+        .xpdb-bed-list, .xpdb-keep-list {
+          list-style: none; margin: 0; padding: 0;
+          display: flex; flex-direction: column; gap: 4px;
+        }
+        .xpdb-bed-list li {
+          display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+          padding: 5px 7px; border: 1px solid ${C.border}; border-radius: 3px; background: #fff;
+        }
+        .xpdb-bed-list li.on { border-color: ${C.primary}; box-shadow: inset 3px 0 0 ${C.primary}; }
+        .xpdb-bed-pick {
+          flex: 1 1 12rem; text-align: left; background: none; border: none; padding: 0;
+          cursor: pointer; font-family: inherit; font-size: 12px; color: ${C.text};
+        }
+        .xpdb-bed-list li > button:not(.xpdb-bed-pick), .xpdb-keep-list button, .xpdb-export button {
+          font-family: inherit; font-size: 12px; padding: 3px 9px; cursor: pointer;
+          border: 1px solid ${C.border}; background: ${C.card}; color: ${C.text}; border-radius: 3px;
+        }
+        .xpdb-bed-fields { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 6px 10px; }
+        .xpdb-bed-fields label {
+          display: flex; align-items: center; gap: 6px; flex: 1 1 12rem;
+          font-size: 11.5px; color: ${C.muted};
+        }
+        .xpdb-bed-fields input, .xpdb-bed-fields select, .xpdb-keep-list input {
+          flex: 1; min-width: 0; font-family: inherit; font-size: 12px; padding: 4px 6px;
+          border: 1px solid ${C.border}; border-radius: 3px; background: #fff; color: ${C.text};
+        }
+        .xpdb-keep-list li { display: flex; gap: 6px; align-items: center; }
+        .xpdb-export { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+        .xpdb-export .xpdb-map-tip { flex-basis: 100%; }
         .xpdb-map-fp polygon {
           fill: ${C.accent}22; stroke: ${C.accent}; stroke-width: 1.5px;
           vector-effect: non-scaling-stroke;
