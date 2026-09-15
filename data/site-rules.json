@@ -79,5 +79,10 @@
     "south": 36.99,
     "east": -102.04,
     "north": 41.0
+  },
+  "geometry": {
+    "mPerDegLonEq": 111320.0,
+    "mPerDegLat": 110540.0,
+    "minAreaM2": 1.0
   }
 }

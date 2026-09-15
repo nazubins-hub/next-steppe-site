@@ -74,6 +74,11 @@ const csp = [
   // built from wherever a drag stopped could never hit USGS's CDN, and quantised
   // tiles behind our own Worker cache can. See worker/map-tile.js.
   //
+  // Esri World Imagery, the map's default layer, comes the same way: the Worker
+  // holds the ArcGIS key and fetches each tile itself, so no Esri imagery host
+  // belongs in img-src or connect-src — adding one would be the first step
+  // toward putting the key in the page.
+  //
   // Both USGS hosts remain in connect-src below, for fetch() calls that survive:
   // the terrain read, and the imagery survey year. An <img> and a fetch() are
   // governed by SEPARATE directives, so removing a host from one says nothing

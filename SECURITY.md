@@ -183,8 +183,9 @@ Expect only these, and nothing else:
 | `www.inaturalist.org` | each borrowed photograph's `sourceUrl` — a CC-BY obligation, on `/credits` and the species pages |
 | `creativecommons.org` | the licence deeds those credits link to |
 | `cloudflareinsights.com`, `static.cloudflareinsights.com` | named in the CSP, not fetched by any markup here |
-| `elevation.nationalmap.gov` | USGS 3DEP — the terrain read behind the plant browser's address lookup, and the hillshade layer of its pin map |
-| `imagery.nationalmap.gov` | USGS NAIP Plus orthoimagery — the pin map's default layer, and the survey-year probe behind its caption |
+| `elevation.nationalmap.gov` | USGS 3DEP — the terrain read behind the plant browser's address lookup |
+| `imagery.nationalmap.gov` | USGS NAIP Plus — the survey-year probe behind the 2019 aerial's caption |
+| `services2.arcgis.com` | FEMA/ORNL USA Structures — the building outlines the pin map offers to tap |
 
 **No `fonts.googleapis.com`.** Most of these are link *targets* in the markup, not
 requests the page makes. Cloudflare's beacon is injected at the edge and so never
@@ -201,7 +202,9 @@ are involved and **they are deliberately reached by different routes**.
 | geocode | `worker/site-lookup.js` → `geocoding.geo.census.gov` | this origin, and the Census Bureau |
 | hardiness zone | the same function → `phzmapi.org`, by **ZIP only** | neither sees the street address |
 | elevation / slope / aspect | the browser → `elevation.nationalmap.gov` | nobody — USGS is given coordinates |
-| map imagery | the browser → `imagery.nationalmap.gov` / `elevation.nationalmap.gov` | nobody — a bounding box, never the address |
+| map imagery, default | the browser → `/api/map-tile` (this origin) → `ibasemaps-api.arcgis.com`, Esri World Imagery, with our key | nobody — Esri gets tile coordinates from this Worker, never the visitor's IP |
+| map imagery, 2019 aerial and landform | the browser → `/api/map-tile` (this origin) → `imagery.nationalmap.gov` / `elevation.nationalmap.gov` | nobody — tile coordinates, never the address |
+| building outlines | the browser → `services2.arcgis.com`, FEMA/ORNL USA Structures | nobody — a bounding box |
 
 The split is the point. The Census geocoder sends no `Access-Control-Allow-Origin`,
 so it *had* to be proxied — but having a proxy also means the typed address never
@@ -236,18 +239,32 @@ Cloudflare's logs, and this endpoint carries a street address in its query strin
 The no-logging promise above is only as good as that setting; `wrangler.jsonc`
 says so at the point where someone would switch it on.
 
-**The pin map adds `img-src`, not a tile CDN.** Both imagery services take a
-bounding box and return one PNG, so a view is a single `<img>` rather than a grid
-of tiles, and there is no mapping library in the bundle. `img-src` names the two
-federal hosts explicitly — note it does **not** inherit `connect-src`, so
-`elevation.nationalmap.gov` had to be listed again even though the terrain read
-already used it, and `imagery.nationalmap.gov` appears in **both**: the map tile
-is an `<img>` and the imagery-year probe is a `fetch` against the same server.
-Drop either and a different half of the same feature stops working.
+**The pin map's imagery comes through this origin.** Tiles are addressed as
+integer z/x/y and served by `/api/map-tile`, so `img-src` is `'self' data:` and
+names no imagery host, and there is no mapping library in the bundle. The two
+USGS layers are held in Cloudflare's shared cache for a week, because that is
+what makes an on-demand render usable. The Esri layer is cached nowhere but the
+visitor's own browser (`Cache-Control: private`): nothing in Esri's terms grants
+serving one billed tile to many visitors. `imagery.nationalmap.gov` stays in
+`connect-src` for one `fetch`, the survey-year probe behind the 2019 aerial's
+caption — an `<img>` and a `fetch` are governed by separate directives.
 
-A map request reveals a bounding box: coarser than the coordinates USGS already
-receives for the terrain read, and to the same federal operator. It does not
-reveal the address, which never leaves this origin.
+**The Esri key is a Worker secret, `ARCGIS_API_KEY`.** It is an ArcGIS Location
+Platform key with the Basemaps privilege only. It is not in the repo — `.dev.vars`
+holds the local copy and is git-ignored — not in the page, and not in any
+response: an Esri error is re-worded rather than passed on, because the upstream
+URL carries the token. `badTile()` bounds what the key can be spent on to
+Colorado, at the zooms the map offers. Esri reports a missing token as HTTP 200
+with a JSON body, so the Worker treats anything that is not an image as a
+refusal; a missing key drops the map to the 2019 aerial, and never blanks it. A
+lapsed or wrong key is not refused at all — measured 2026-09-15, Esri served
+real imagery for invented tokens — so nothing on the page shows that a key has
+run out. Renewing it before its expiry date is what keeps the site licensed.
+
+A map request reveals a tile: coarser than the coordinates USGS already receives
+for the terrain read. Esri receives it from this Worker, so it never sees the
+visitor's IP or `Referer`, and nobody receives the address, which never leaves
+this origin.
 
 **Why the CSP gained a host and not two.** `connect-src` allows
 `elevation.nationalmap.gov` because the browser genuinely fetches it. It does *not*
