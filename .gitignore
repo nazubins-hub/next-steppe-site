@@ -20,6 +20,10 @@ npm-debug.log*
 .env
 .env.production
 
+# The map imagery key for `wrangler dev`, as ARCGIS_API_KEY=... — the local twin
+# of the Worker secret. A key in a public repo is a key anyone can bill.
+.dev.vars
+
 # macOS-specific files
 .DS_Store
 
