@@ -1,0 +1,343 @@
+/**
+ * The studio's own styles, prefixed `st-`.
+ *
+ * It borrows the site's tokens (global.css) so the two do not look like different
+ * companies, and then diverges on purpose: this is an instrument, not a page. Dense
+ * rows, monospace for every measured value — the report sheets do the same, and for
+ * the same reason: a number you might type into a command should look like one —
+ * and no decorative motion anywhere near a drawing tool.
+ */
+
+.st-app {
+  --st-gap: 0.75rem;
+  max-width: 1500px;
+  margin: 0 auto;
+  padding: 0 16px 3rem;
+}
+
+.st-split {
+  display: grid;
+  gap: 1.25rem;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 1000px) {
+  .st-split {
+    grid-template-columns: minmax(0, 1fr) 24rem;
+    align-items: start;
+  }
+  .st-map {
+    position: sticky;
+    top: 1rem;
+  }
+}
+
+/* ── the map ───────────────────────────────────────────────────────────────── */
+
+.st-map__bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--st-gap);
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+.st-stage {
+  position: relative;
+  aspect-ratio: 1;
+  overflow: hidden;
+  background: var(--basalt);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  touch-action: none;             /* the gestures are ours, not the browser's */
+  cursor: crosshair;
+  user-select: none;
+}
+
+.st-layer {
+  position: absolute;
+  inset: 0;
+  will-change: transform;         /* the pan moves this, not React */
+}
+
+.st-tile {
+  position: absolute;
+  display: block;
+  image-rendering: auto;
+  pointer-events: none;
+}
+
+/* The previous level, kept underneath until the new one has loaded. */
+.st-tile--ghost { opacity: 0.85; }
+
+.st-draw {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;           /* hit-testing is arithmetic — useMapGestures */
+}
+
+.st-draw polygon,
+.st-draw polyline {
+  vector-effect: non-scaling-stroke;
+  fill: none;
+}
+
+.st-house      { stroke: #ffd27d; stroke-width: 2; fill: #ffd27d; fill-opacity: 0.14; }
+.st-footprint  { stroke: #9fd8ff; stroke-width: 1; stroke-dasharray: 3 3; fill: #9fd8ff; fill-opacity: 0.08; }
+.st-bed        { stroke: #8ef0a8; stroke-width: 2; fill: #8ef0a8; fill-opacity: 0.16; }
+.st-bed--active{ stroke: #ffffff; stroke-width: 3; fill-opacity: 0.26; }
+.st-keep       { stroke: #d7a6ff; stroke-width: 2; stroke-dasharray: 5 3; fill: #d7a6ff; fill-opacity: 0.1; }
+.st-trace      { stroke: #ffffff; stroke-width: 2; stroke-dasharray: 6 4; }
+
+.st-corner        { fill: #ffffff; stroke: var(--basalt); stroke-width: 1; }
+.st-corner--first { fill: #8ef0a8; }
+.st-handle        { fill: #ffffff; stroke: var(--basalt); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+
+.st-marker circle { fill: #ffffff; stroke: var(--basalt); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.st-marker--pin circle { fill: var(--sienna); }
+.st-marker--house circle { fill: #ffd27d; }
+.st-marker--keep circle { fill: #d7a6ff; }
+.st-marker text {
+  font-family: var(--font-mono);
+  font-size: 0.022px;            /* the viewBox is 0..1 */
+  fill: #ffffff;
+  paint-order: stroke;
+  stroke: rgba(0, 0, 0, 0.7);
+  stroke-width: 0.006px;
+  text-anchor: middle;
+}
+
+.st-credit {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 0.3rem 0.5rem;
+  background: rgba(38, 36, 32, 0.72);
+  color: #f3efe4;
+  font-size: 0.7rem;
+  line-height: 1.3;
+}
+
+.st-trace-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 0.5rem;
+  padding: 0.5rem;
+  background: var(--sand-light);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+}
+
+.st-zoom {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  padding: 0 0.35rem;
+}
+
+.st-empty {
+  padding: 3rem 1rem;
+  text-align: center;
+  color: var(--basalt-soft);
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+}
+
+/* ── panels ────────────────────────────────────────────────────────────────── */
+
+.st-panels { display: grid; gap: 0.75rem; }
+
+.st-panel {
+  background: var(--sand-light);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.st-panel__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.5rem 0.7rem;
+  font-size: 1rem;
+}
+
+.st-panel__title {
+  font: inherit;
+  font-family: var(--font-display);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  color: inherit;
+}
+
+.st-panel__aside {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--basalt-soft);
+}
+
+.st-panel__body {
+  padding: 0 0.7rem 0.7rem;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.st-sub {
+  margin: 0.4rem 0 0;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--basalt-soft);
+}
+
+/* ── fields ────────────────────────────────────────────────────────────────── */
+
+.st-row { display: grid; gap: 0.2rem; }
+
+.st-row__label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--basalt-soft);
+}
+
+.st-row__hint { font-size: 0.75rem; color: var(--basalt-soft); }
+.st-row__error { font-size: 0.75rem; color: var(--sienna); font-weight: 600; }
+
+.st-input {
+  font: inherit;
+  font-size: 0.9rem;
+  padding: 0.35rem 0.45rem;
+  background: #fffdf7;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--basalt);
+  width: 100%;
+}
+
+.st-input--mono { font-family: var(--font-mono); }
+.st-input--area { resize: vertical; }
+.st-file { display: none; }
+
+.st-find {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.4rem;
+  align-items: end;
+}
+
+.st-choice, .st-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  align-items: center;
+}
+
+.st-btn {
+  font: inherit;
+  font-size: 0.82rem;
+  padding: 0.3rem 0.6rem;
+  background: #fffdf7;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--basalt);
+  cursor: pointer;
+}
+
+.st-btn:hover:not(:disabled) { border-color: var(--juniper); }
+.st-btn:disabled { opacity: 0.45; cursor: default; }
+.st-btn--on { background: var(--juniper); border-color: var(--juniper-dark); color: var(--sand-light); }
+.st-btn--go { background: var(--sienna); border-color: var(--sienna); color: #fff; }
+.st-btn--quiet { background: transparent; font-size: 0.78rem; }
+
+/* ── readouts ──────────────────────────────────────────────────────────────── */
+
+.st-facts { display: grid; gap: 0.35rem; }
+
+.st-fact {
+  display: grid;
+  grid-template-columns: 8.5rem minmax(0, 1fr);
+  gap: 0.4rem;
+  align-items: baseline;
+  font-size: 0.85rem;
+}
+
+.st-fact__label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--basalt-soft); }
+.st-fact__value { font-family: var(--font-mono); }
+.st-fact__src { grid-column: 2; font-size: 0.7rem; color: var(--basalt-soft); }
+
+.st-measures {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.3rem 0.6rem;
+  margin: 0;
+}
+
+.st-measures dt { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--basalt-soft); }
+.st-measures dd { margin: 0; font-family: var(--font-mono); font-size: 0.85rem; }
+
+.st-bed-card {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.5rem;
+  background: #fffdf7;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.st-bed-card--on { border-left-color: var(--juniper); }
+.st-bed-card__head { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0.3rem; align-items: end; }
+
+.st-bed-card__pick {
+  font: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  padding: 0 0 0.3rem;
+  color: var(--juniper);
+}
+
+.st-keep-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.4rem;
+  align-items: end;
+}
+
+/* ── notices ───────────────────────────────────────────────────────────────── */
+
+.st-notice {
+  position: relative;
+  margin: 0 0 0.5rem;
+  padding: 0.45rem 1.6rem 0.45rem 0.6rem;
+  font-size: 0.82rem;
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: var(--radius);
+  background: var(--sand-light);
+}
+
+.st-notice--info  { border-left-color: var(--juniper); }
+.st-notice--warn  { border-left-color: #b6961e; }
+.st-notice--error { border-left-color: var(--sienna); }
+
+.st-notice__x {
+  position: absolute;
+  top: 0.15rem;
+  right: 0.3rem;
+  font: inherit;
+  font-size: 1rem;
+  line-height: 1;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  color: var(--basalt-soft);
+}

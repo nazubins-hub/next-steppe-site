@@ -69,14 +69,41 @@ if (!existsSync(root)) {
   process.exit(1);
 }
 
+/* WHICH PYTHON, AND WHY IT MATTERS HERE
+   `render_jsx.py --check` imports its way into Pillow (through the elevation
+   resolver), so the interpreter has to be the database repo's virtualenv. A bare
+   `python3` on this machine is a Homebrew build without those packages, and the
+   ImportError it raises is caught below — which used to report a working repo as
+   "stale", sending you to regenerate a file that was already correct.
+   So: an explicit PLANT_DB_PYTHON wins, else the repo's own .venv, else plain
+   python3 — and whichever ran is printed, along with what it actually said. */
+const pythonFor = (repo) => {
+  if (process.env.PLANT_DB_PYTHON) return process.env.PLANT_DB_PYTHON;
+  const venv = join(repo, '.venv', 'bin', 'python3');
+  return existsSync(venv) ? venv : 'python3';
+};
+
+const python = pythonFor(root);
+
 // The database generates its .jsx from plants.json. A stale generated file means the
 // UI template may not match the data it renders.
 try {
-  execFileSync('python3', ['scripts/render_jsx.py', '--check'], { cwd: root, stdio: 'pipe' });
-} catch {
-  console.error("  the database's generated UI is stale against plants.json.");
-  console.error('  regenerate it in the database repo first:');
-  console.error(`    cd "${root}" && python3 scripts/render_jsx.py`);
+  execFileSync(python, ['scripts/render_jsx.py', '--check'], { cwd: root, stdio: 'pipe' });
+  console.log(`  checked the generated UI with ${python}`);
+} catch (err) {
+  const said = [err.stdout, err.stderr]
+    .map((b) => (b ? b.toString().trim() : ''))
+    .filter(Boolean)
+    .join('\n');
+  console.error(`  \`${python} scripts/render_jsx.py --check\` did not pass.`);
+  if (said) {
+    console.error('  it said:');
+    for (const line of said.split('\n').slice(-8)) console.error(`    ${line}`);
+  }
+  console.error('  if the generated UI is stale, regenerate it in the database repo:');
+  console.error(`    cd "${root}" && .venv/bin/python3 scripts/render_jsx.py`);
+  console.error('  if it is an ImportError, the interpreter is wrong, not the file:');
+  console.error('    PLANT_DB_PYTHON=/path/to/python3 npm run sync:plants');
   process.exit(1);
 }
 

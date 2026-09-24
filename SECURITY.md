@@ -36,7 +36,8 @@ Host-header SSRF have nothing to act on.
 
 That claim survived the introduction of `worker/`, but only just, and the reason
 is worth stating: the Worker is not Astro and does not render markup. It answers
-one route, `/api/site-lookup`, with JSON, and hands everything else back to the
+three route groups — `/api/site-lookup`, `/api/map-tile` and `/studio/api/*` — with
+JSON or an image, and hands everything else back to the
 asset server. Nothing it returns is HTML, and nothing it receives is interpolated
 into a page. **If a future route ever renders markup, this paragraph stops being
 true** and the Astro advisories above need re-reading against it.
@@ -119,9 +120,11 @@ Two deliberate compromises:
   *here* only because the site renders no user input: every value comes from a
   build-time data file, and the single `dangerouslySetInnerHTML` is a static literal
   with no interpolation. Do not read this as "inline styles are fine".
-- **No HSTS yet.** `Strict-Transport-Security` is a promise that the domain is always
-  reachable over HTTPS, cached by browsers for its `max-age` regardless of whether
-  that stays true. Add it once the real domain is wired up and confirmed.
+- **HSTS is live, at one year.** `Strict-Transport-Security` is a promise that the
+  domain is always reachable over HTTPS, cached by browsers for its `max-age`
+  regardless of whether that stays true — so it started at one day on 2026-08-13 and
+  was raised to `max-age=31536000` on 2026-08-23 once that had run clean. No
+  `preload`: that list is compiled into browser binaries and removal takes months.
 
 To verify the CSP doesn't break anything after a change, serve `dist/` with the
 headers applied (`astro preview` ignores `_headers`) and confirm the `/plants` island
@@ -276,6 +279,73 @@ comment in `scripts/build-headers.mjs` says so at the point of change.
 interpolates the address into HTML, and the browser renders `matchedAddress` — the
 Census Bureau's normalised echo — as a React text child, not as markup.
 
+## The studio: a private area on a public site
+
+`/studio/` is an in-house tool — trace a client's beds on licensed aerial imagery,
+measure them, and export a file the planting pipeline reads. It is on this site
+because that is where the map already was; it is not for visitors.
+
+**Cloudflare Access is what keeps strangers out, and it has to be.** The studio page
+is a static asset, and Workers static assets are served *before* the Worker runs, so
+no check written in `worker/` could defend the page itself. A Zero Trust application
+covers `nextsteppe.garden/studio` **and** `nextsteppe.garden/studio/*` — both, because
+a wildcard path does not cover its own parent — and an unauthenticated request to
+either is answered with a login redirect that never reaches this code.
+
+**The Worker verifies the same sign-in again on `/studio/api/*`,** in
+`worker/access.js`, and that is not belt-and-braces theatre: a Worker can also be
+reached on `*.workers.dev` and on per-version preview URLs, which an Access
+application attached to a zone hostname does not cover. Both are turned off in
+`wrangler.jsonc` (`workers_dev: false`, `preview_urls: false`) because a dashboard
+toggle is undone by the next deploy that disagrees with it — but the token check is
+what makes that a second line rather than the only one. On any host without Access in
+front, `/studio/api/*` answers 403 and the Esri key stays unspent.
+
+What that check does, in order: structure (three parts, `RS256`, a `kid`), then
+claims (`iss`, `aud`, `exp`, `nbf` with 60 s of skew), then the key, then the
+signature. Nothing touches the network until the free checks pass, so a stream of
+tokens carrying an unknown `kid` cannot make this Worker fetch certificates: key
+fetches are coalesced and rate-limited to at worst one per isolate per minute.
+Verification is `crypto.subtle` and no dependency — Cloudflare's own example uses
+`jose`, and an npm package in the auth path is the opposite of the pinning policy
+above. Every failure returns the same 403 with no reason, no claim and no fragment of
+a token, and nothing is logged.
+
+**Nothing about a client is stored on this site.** The rule the public map was built
+on — the outline is downloaded, not submitted — did not stop applying when the tool
+moved behind a sign-in. There is no database, no KV, no R2: the studio's output is a
+file you download, and its work-in-progress is a draft in your own browser's
+localStorage, which never leaves the machine. `dist/_headers` gives `/studio` and
+`/studio/*` `no-store` so a page holding an address and outlines is not left in a
+browser cache, `no-transform` so Cloudflare's analytics beacon is not injected into a
+page that shares an origin with those drafts, and `X-Robots-Tag: noindex, nofollow`.
+The sitemap excludes the path (`astro.config.mjs`), the page carries a `noindex` meta
+tag of its own, and nothing on the public site links to it.
+
+**The local bypass cannot fire in production.** `wrangler dev` cannot put Access in
+front of anything, so `worker/access.js` accepts `STUDIO_DEV_BYPASS=1` — but only
+when the request also arrived on `localhost`, `127.0.0.1` or `[::1]`. On
+nextsteppe.garden the host check fails even if the variable is somehow set.
+
+**Esri is now the studio's alone.** `/api/map-tile` and `/studio/api/map-tile` are
+the same handler with different layer sets; only the private one may serve
+`imagery`. Esri tiles keep `Cache-Control: private` and never enter the shared cache,
+the attribution renders whenever the layer is visible, and a licensed tile is now
+fetched for one signed-in person rather than for every visitor.
+
+Verify the claims above:
+
+```bash
+# No CORS header is ever SET — the matches that remain are prose explaining why
+# other people's endpoints do or do not send one.
+grep -rnE "headers[^\n]*['\"]Access-Control" worker/ src/   # expect none
+# The bypass may be described in config, never defined there. It lives in .dev.vars.
+grep -rnE '"STUDIO_DEV_BYPASS"' wrangler.jsonc               # expect none
+grep -rn "searchParams" src/studio/                          # expect none: no slug or address in a URL
+npm test                                                     # access.js against a generated key pair
+curl -sI https://nextsteppe.garden/studio/ | head -1         # expect 302 to <team>.cloudflareaccess.com
+```
+
 ## Contact form
 
 Live, posting to `https://formspree.io/f/mlgqrnzy`. Submissions carry a name, email,
@@ -334,8 +404,22 @@ here by `src/lib/image-gate.js`. `lat`, `lon`, `notes`, `file`, `determinations`
 `sync-plant-db.mjs` walks each one's RIFF chunk list and refuses any carrying EXIF or
 XMP. A photograph's capture location is, on a job, a client's address.
 
-No secrets, `.env` files, or API keys are present or expected — the site is fully
-static and calls no APIs.
+**Secrets exist now, and none of them is in this repo.** The Worker holds three,
+set with `wrangler secret put` or as dashboard Secrets (type Secret, not Text —
+`wrangler deploy` removes Text variables that are not in `wrangler.jsonc`):
+
+| secret | read by | what it is |
+|---|---|---|
+| `ARCGIS_API_KEY` | `worker/map-tile.js` | the Esri World Imagery key, a Location Platform key with the Basemaps privilege only |
+| `ACCESS_TEAM_DOMAIN` | `worker/access.js` | the Zero Trust team, which is both the token issuer and where its certificates live |
+| `ACCESS_AUD` | `worker/access.js` | the Access application's Audience tag |
+
+None reaches a response: the tile proxy rewords Esri's errors so a refused token
+cannot be echoed, and `access.js` answers every failure with the same bare 403.
+`wrangler.jsonc` has no `observability` block, so none of them reaches a log either.
+Locally they live in `.dev.vars`, which `.gitignore` keeps out of this public repo.
+**Never run `wrangler secret bulk .dev.vars`** — it would upload `STUDIO_DEV_BYPASS`,
+which exists only to make the studio runnable on localhost.
 
 ## Accepted, not fixed
 

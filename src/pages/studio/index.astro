@@ -1,0 +1,45 @@
+---
+/**
+ * /studio/ — the private site-context tool.
+ *
+ * WHAT PROTECTS THIS PAGE
+ * Cloudflare Access, at the edge. This file builds to a static asset, and static
+ * assets are served before the Worker runs, so no check inside worker/ could
+ * defend it — see worker/access.js. The Worker's job is the routes under
+ * /studio/api/*, which is where the Esri key is spent.
+ *
+ * `client:only` rather than `client:load`: the app reads a draft out of
+ * localStorage on its first render and there is nothing here worth pre-rendering.
+ * Server-rendering it would mean building markup for a state that is wrong by the
+ * time it reaches the browser.
+ *
+ * NOTHING under /studio/api may be a page — a file built there would shadow the
+ * Worker route. scripts/check-studio-build.mjs fails the build if one appears.
+ */
+import StudioLayout from '../../layouts/StudioLayout.astro';
+import StudioApp from '../../studio/StudioApp.jsx';
+---
+
+<StudioLayout title="Studio — Next Steppe">
+  <StudioApp client:only="react">
+    <p slot="fallback" class="st-loading">Loading the studio…</p>
+  </StudioApp>
+
+  <noscript>
+    <p class="st-loading">
+      The studio is a drawing tool and needs JavaScript. Everything it produces is a file you download;
+      nothing is stored on the server.
+    </p>
+  </noscript>
+
+  <style>
+    .st-loading {
+      max-width: 1500px;
+      margin: 0 auto;
+      padding: 3rem 16px;
+      color: var(--basalt-soft);
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+    }
+  </style>
+</StudioLayout>
