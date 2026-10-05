@@ -26,16 +26,56 @@
     // in worker/index.js.
     "binding": "ASSETS",
     "not_found_handling": "404-page"
-  }
+  },
 
-  // ONE SECRET: ARCGIS_API_KEY — the pin map's Esri World Imagery key, an
-  // ArcGIS Location Platform API key with the Basemaps privilege only. It is
-  // NOT in this file and must never be: set it in the dashboard (Workers &
-  // Pages → dry-gulch-site → Settings → Variables and Secrets, type Secret) or
-  // with `npx wrangler secret put ARCGIS_API_KEY`. Secrets survive deploys from
-  // GitHub. For `wrangler dev` it lives in .dev.vars, which .gitignore keeps out
-  // of this public repo. Without it the map falls back to the 2019 USGS aerial;
-  // see worker/map-tile.js.
+  // ── The two hostnames that would otherwise walk around Cloudflare Access ──
+  //
+  // The Zero Trust application protects `nextsteppe.garden/studio` and
+  // `nextsteppe.garden/studio/*`. It does NOT protect a Worker reached on
+  // `*.workers.dev` or on a per-version preview URL, because those are not the
+  // zone. Both are off here, in the repo, because a dashboard toggle is undone
+  // by the next `wrangler deploy` that disagrees with it.
+  //
+  // Turning them off is belt to worker/access.js's braces, not instead of them:
+  // the studio's private routes verify Access's signed token on every request,
+  // so even on an unprotected host they answer 403 and the Esri key stays unspent.
+  // What these flags remove is a second public copy of the whole site.
+  //
+  // If a branch preview is ever wanted for review, protect it with its own
+  // Access application rather than setting `preview_urls` back to true alone.
+  "workers_dev": false,
+  "preview_urls": false
+
+  // THREE SECRETS, none of them in this file and none of them ever in it. Set
+  // each one in the dashboard (Workers & Pages → dry-gulch-site → Settings →
+  // Variables and Secrets, type **Secret**, not Text — `wrangler deploy` removes
+  // Text variables that are not in this config) or with `npx wrangler secret
+  // put <NAME>`. Secrets survive deploys from GitHub. For `wrangler dev` they
+  // live in .dev.vars, which .gitignore keeps out of this public repo.
+  //
+  //   ARCGIS_API_KEY       the map's Esri World Imagery key: an ArcGIS Location
+  //                        Platform key with the Basemaps privilege only. Read in
+  //                        worker/map-tile.js and nowhere else. Without it the
+  //                        map falls back to the 2019 USGS aerial. Esri is now
+  //                        reached only through /studio/api/map-tile, so this key
+  //                        is spent by one signed-in person rather than by every
+  //                        visitor.
+  //   ACCESS_TEAM_DOMAIN   `<team>.cloudflareaccess.com` — the Zero Trust team,
+  //                        which is both the token's issuer and where its signing
+  //                        certificates are published.
+  //   ACCESS_AUD           the Access application's Audience tag, which pins a
+  //                        token to THIS application rather than any other one
+  //                        the same team might protect.
+  //
+  // Both ACCESS_* values are secrets for two plain reasons: a Secret survives a
+  // deploy where a dashboard Text variable does not, and this repo is public, so
+  // the team name would otherwise be published. worker/access.js refuses every
+  // private request when either is missing — an unconfigured studio is a closed
+  // studio.
+  //
+  // .dev.vars also carries STUDIO_DEV_BYPASS=1, which only works together with a
+  // localhost hostname. It must NEVER be set as a Worker secret: do not run
+  // `wrangler secret bulk .dev.vars`. See worker/access.js, isLocalDev().
 
   // NO `observability` block, deliberately. Enabling it samples request URLs
   // into Cloudflare's logs, and `/api/site-lookup?address=...` carries a

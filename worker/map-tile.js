@@ -92,6 +92,20 @@ const LAYERS = {
    before the deploy still asks for it, and should keep getting pictures. */
 const ALIASES = { aerial: 'naip' };
 
+/* WHICH LAYERS EACH ROUTE MAY SPEND
+   The table above says what this file can fetch; these two sets say who may ask.
+   `/api/map-tile` is public and `/studio/api/map-tile` is behind Cloudflare
+   Access, and only the second one is allowed to spend the Esri key once the
+   public map has stopped asking for it — the tracing tool that needs Esri is in
+   the studio now, and a keyless route cannot be billed by a stranger.
+   Until the public template ships without the Esri layer, `imagery` has to stay
+   in PUBLIC_LAYERS: taking it out first would blank the live map. Removing it
+   here, with PUBLIC_DEFAULT set to `naip`, IS the public half of that change. */
+export const PUBLIC_LAYERS = new Set(['naip', 'hillshade', 'imagery']);
+export const PUBLIC_DEFAULT = 'imagery';
+export const STUDIO_LAYERS = new Set(['imagery']);
+export const STUDIO_DEFAULT = 'imagery';
+
 /* 1024 and not 256, for the USGS renders. This is not a real tile pyramid —
    every tile is an on-demand render, so the per-request cost is a render, not a
    byte count, and sixteen 256 px tiles cost sixteen renders where one 1024
@@ -265,17 +279,24 @@ async function esriTile(z, x, y, env) {
   });
 }
 
-export async function handleMapTile(request, env, ctx) {
+export async function handleMapTile(request, env, ctx, opts = {}) {
   if (request.method !== 'GET' && request.method !== 'HEAD') {
     return new Response('Method Not Allowed', { status: 405, headers: { Allow: 'GET, HEAD' } });
   }
+
+  const allowed = opts.allowed || PUBLIC_LAYERS;
 
   const q = new URL(request.url).searchParams;
   const z = Number(q.get('z'));
   const x = Number(q.get('x'));
   const y = Number(q.get('y'));
-  const asked = q.get('layer') || 'imagery';
+  const asked = q.get('layer') || opts.fallback || PUBLIC_DEFAULT;
   const layer = ALIASES[asked] || asked;
+
+  /* A layer this route does not serve is refused in the same words as a layer
+     that does not exist. Which route may spend the key is not a visitor's
+     business, and `badTile()` would otherwise answer for it. */
+  if (!allowed.has(layer)) return plainError('unknown layer', 400);
 
   const bad = badTile(z, x, y, layer);
   if (bad) return plainError(bad, 400);

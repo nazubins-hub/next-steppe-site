@@ -18,17 +18,24 @@
  * Workers static assets are served BEFORE this Worker runs. Every page, style,
  * font and photograph matches an asset and never reaches this code — which is
  * the point, because a Worker invocation per image would be absurd. Only a
- * request matching no asset arrives here. Two `/api/` routes mean something,
- * and everything else falls through to `env.ASSETS.fetch()` so the 404 page is
- * still the built one rather than something invented here.
+ * request matching no asset arrives here. Three route groups mean something —
+ * `/api/site-lookup`, `/api/map-tile` and `/studio/api/*` — and everything else
+ * falls through to `env.ASSETS.fetch()` so the 404 page is still the built one
+ * rather than something invented here.
  *
- * `env` carries ARCGIS_API_KEY, the one secret this Worker holds — the map's
- * Esri imagery key. It is read in map-tile.js and nowhere else, and it never
- * reaches a response.
+ * That the studio's PAGE is an asset is exactly why Cloudflare Access, and not
+ * this file, is what keeps strangers out of it: a password check in a Worker
+ * cannot protect a file the Worker never sees. access.js explains the division.
+ *
+ * `env` carries three secrets. ARCGIS_API_KEY is the map's Esri imagery key,
+ * read in map-tile.js and nowhere else; ACCESS_TEAM_DOMAIN and ACCESS_AUD are
+ * read in access.js. None of them reaches a response, and `wrangler.jsonc`
+ * keeps request logging off so none of them reaches a log either.
  */
 
 import { handleSiteLookup } from './site-lookup.js';
-import { handleMapTile } from './map-tile.js';
+import { handleMapTile, PUBLIC_DEFAULT, PUBLIC_LAYERS } from './map-tile.js';
+import { handleStudio } from './studio.js';
 
 export default {
   async fetch(request, env, ctx) {
@@ -47,7 +54,23 @@ export default {
     if (pathname === '/api/map-tile') {
       // `ctx` so a render that outruns the visitor's patience is still finished
       // and cached in the background rather than thrown away. See map-tile.js.
-      return handleMapTile(request, env, ctx);
+      // The layer set is passed in rather than assumed, because the private
+      // route passes a different one — see PUBLIC_LAYERS in map-tile.js.
+      return handleMapTile(request, env, ctx, {
+        allowed: PUBLIC_LAYERS,
+        fallback: PUBLIC_DEFAULT,
+      });
+    }
+
+    // The private tool's routes. Cloudflare Access stops a stranger at the edge
+    // before any of this runs — including for the studio PAGE, which is a static
+    // asset this Worker never sees. studio.js verifies Access's signed token
+    // anyway, because `*.workers.dev` and preview URLs are not covered by an
+    // Access application on the zone. Nothing under here matches an asset (there
+    // is no `src/pages/studio/api`, and the build asserts it), so these requests
+    // always arrive.
+    if (pathname === '/studio/api' || pathname.startsWith('/studio/api/')) {
+      return handleStudio(request, env, ctx);
     }
 
     // Not an asset and not a route: hand it back to the asset server, which

@@ -32,6 +32,32 @@ beside `wrangler.jsonc`, as `ARCGIS_API_KEY=…`. That file is git-ignored.
 Without it the Worker answers the Esri layer with 503 and the map opens on the
 2019 aerial — which is also how to check that fallback.
 
+### Running the studio locally
+
+`/studio/` is the private in-house tool (see **The studio** below). Cloudflare
+Access protects it in production, and `wrangler dev` cannot put Access in front of
+anything — so locally it is opened by a bypass that cannot fire anywhere else. Add
+to `.dev.vars`:
+
+```
+STUDIO_DEV_BYPASS=1
+```
+
+and use `npm run dev:worker`. On :4321 the page loads but every `/studio/api/*`
+call 404s, and the studio says so rather than looking broken.
+
+**Never run `wrangler secret bulk .dev.vars`.** It would upload that flag as a
+Worker secret. It would still not open the studio — `worker/access.js` also
+requires the request to have arrived on localhost — but a bypass flag in production
+config is not a thing to keep.
+
+Tests cover the parts a page cannot exercise: the Access token check, and the
+engine the studio measures with.
+
+```bash
+npm test             # node --test; also runs as part of `npm run build`
+```
+
 ## The plant database
 
 The 100-species database is **not authored here**. It lives in its own repo
@@ -236,6 +262,28 @@ module instead of the page. Do not upgrade the integration without upgrading Ast
   they disclose a correction rather than an estimate. Left in deliberately.
 - `astro.config.mjs` still has `site: 'https://example.com'` — set it to the real
   domain when DNS is wired up.
+
+## The studio
+
+`/studio/` is an in-house tool, not part of the public site: trace a client's beds
+on Esri aerial imagery, measure them against the house, read the ground from USGS
+3DEP, and export a GeoJSON that plant-system's `geometry.py read` takes unchanged.
+
+- **Signed in with Cloudflare Access.** The page is a static asset, so Access — not
+  this repo's code — is what keeps it private; `worker/access.js` verifies the same
+  token again on `/studio/api/*`, which is what protects the Esri key on hosts
+  Access does not cover. SECURITY.md has the full account, and
+  [docs/cloudflare-access.md](docs/cloudflare-access.md) is the click-by-click
+  dashboard setup.
+- **Nothing is stored on the server.** Work in progress is a draft in your own
+  browser; the artefact is the file you download. The rule that client geometry
+  stays off every server did not change when the tool moved behind a sign-in.
+- **Esri is the studio's.** The public map keeps the keyless USGS layers; only
+  `/studio/api/map-tile` may serve `imagery`.
+- **The engine is a copy, on purpose.** `src/studio/engine/` mirrors blocks of
+  `plant-system/ui/template.jsx` — the same measurement code the public browser and
+  `geometry.py` use, so one site cannot be measured two ways. The mirrored blocks
+  are fenced with `@mirror` markers; `npm test` exercises them.
 
 ## Deploying (GitHub → Cloudflare Workers)
 

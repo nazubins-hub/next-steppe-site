@@ -1,0 +1,88 @@
+---
+/**
+ * The shell for the private area.
+ *
+ * NOT BaseLayout, and the differences are all deliberate:
+ *
+ *   noindex, nofollow   said on the page as well as in dist/_headers. A crawler
+ *                       behind Cloudflare Access only ever sees a login redirect,
+ *                       but this site has no robots.txt of its own (Cloudflare
+ *                       serves a managed one), so the page states it itself.
+ *
+ *   no canonical, no og, no twitter, no sitemap link. Those tags exist to make a
+ *                       page shareable, and this page is not. This layout also asks
+ *                       the framework for no URL of its own, which is what keeps
+ *                       SECURITY.md's verification grep for request-shaped APIs
+ *                       answering with BaseLayout and nothing else.
+ *
+ *   no site nav         nothing links here from the public site, and nothing here
+ *                       links back into it. The studio is a tool, and the header
+ *                       says which tool and whose.
+ */
+import '../styles/global.css';
+import '../studio/studio.css';
+
+interface Props {
+  title: string;
+}
+
+const { title } = Astro.props;
+---
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{title}</title>
+  <meta name="robots" content="noindex, nofollow" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+</head>
+<body class="st-body">
+  <header class="st-head">
+    <div class="st-head__inner">
+      <span class="st-head__mark">Next Steppe <b>Studio</b></span>
+      <span class="st-head__note">private · signed in with Cloudflare Access · nothing is stored on the server</span>
+    </div>
+  </header>
+
+  <main>
+    <slot />
+  </main>
+
+  <style>
+    .st-body { background: var(--sand); }
+
+    .st-head {
+      background: var(--basalt);
+      color: var(--sand-light);
+      border-bottom: 1px solid var(--juniper-dark);
+    }
+
+    .st-head__inner {
+      max-width: 1500px;
+      margin: 0 auto;
+      padding: 0.6rem 16px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.3rem 1rem;
+      align-items: baseline;
+      justify-content: space-between;
+    }
+
+    .st-head__mark {
+      font-family: var(--font-display);
+      font-size: 1.05rem;
+      letter-spacing: 0.01em;
+    }
+
+    .st-head__mark b { font-weight: 600; color: #ffd27d; }
+
+    .st-head__note {
+      font-family: var(--font-mono);
+      font-size: 0.68rem;
+      color: #bdb49e;
+    }
+  </style>
+</body>
+</html>
