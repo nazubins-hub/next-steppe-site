@@ -283,7 +283,9 @@ Census Bureau's normalised echo — as a React text child, not as markup.
 
 `/studio/` is an in-house tool — trace a client's beds on licensed aerial imagery,
 measure them, and export a file the planting pipeline reads. It is on this site
-because that is where the map already was; it is not for visitors.
+because that is where the map already was; it is not for visitors. The dashboard
+steps that set this up live in [docs/cloudflare-access.md](docs/cloudflare-access.md);
+what follows is why they are what they are.
 
 **Cloudflare Access is what keeps strangers out, and it has to be.** The studio page
 is a static asset, and Workers static assets are served *before* the Worker runs, so

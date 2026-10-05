@@ -272,7 +272,9 @@ on Esri aerial imagery, measure them against the house, read the ground from USG
 - **Signed in with Cloudflare Access.** The page is a static asset, so Access — not
   this repo's code — is what keeps it private; `worker/access.js` verifies the same
   token again on `/studio/api/*`, which is what protects the Esri key on hosts
-  Access does not cover. SECURITY.md has the full account.
+  Access does not cover. SECURITY.md has the full account, and
+  [docs/cloudflare-access.md](docs/cloudflare-access.md) is the click-by-click
+  dashboard setup.
 - **Nothing is stored on the server.** Work in progress is a draft in your own
   browser; the artefact is the file you download. The rule that client geometry
   stays off every server did not change when the tool moved behind a sign-in.
