@@ -118,6 +118,64 @@
       }
     },
     {
+      "id": "allium-cernuum--habit--002",
+      "speciesId": 110,
+      "sci": "Allium cernuum",
+      "role": "habit",
+      "tier": 0,
+      "status": "active",
+      "season": "summer",
+      "credit": "Carolyn Prentice",
+      "license": "CC0",
+      "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "sourceUrl": "https://www.inaturalist.org/observations/296306714",
+      "idVerification": "inat-research",
+      "capturedAt": "2025-07-08",
+      "elevationFt": null,
+      "site": {},
+      "derivatives": {
+        "thumb": {
+          "src": "/plants/allium-cernuum--habit--002/thumb.webp",
+          "width": 400,
+          "height": 533
+        },
+        "card": {
+          "src": "/plants/allium-cernuum--habit--002/card.webp",
+          "width": 768,
+          "height": 1024
+        }
+      }
+    },
+    {
+      "id": "allium-geyeri--habit--002",
+      "speciesId": 111,
+      "sci": "Allium geyeri",
+      "role": "habit",
+      "tier": 0,
+      "status": "active",
+      "season": "spring",
+      "credit": "Chris Fluit",
+      "license": "CC-BY",
+      "licenseUrl": "https://creativecommons.org/licenses/by/4.0/",
+      "sourceUrl": "https://www.inaturalist.org/observations/116219196",
+      "idVerification": "inat-research",
+      "capturedAt": "2022-05-08",
+      "elevationFt": null,
+      "site": {},
+      "derivatives": {
+        "thumb": {
+          "src": "/plants/allium-geyeri--habit--002/thumb.webp",
+          "width": 400,
+          "height": 533
+        },
+        "card": {
+          "src": "/plants/allium-geyeri--habit--002/card.webp",
+          "width": 768,
+          "height": 1024
+        }
+      }
+    },
+    {
       "id": "amelanchier-alnifolia--habit--001",
       "speciesId": 21,
       "sci": "Amelanchier alnifolia",
@@ -201,6 +259,35 @@
           "src": "/plants/antennaria-parvifolia--habit--001/card.webp",
           "width": 800,
           "height": 600
+        }
+      }
+    },
+    {
+      "id": "antennaria-rosea--habit--003",
+      "speciesId": 112,
+      "sci": "Antennaria rosea",
+      "role": "habit",
+      "tier": 0,
+      "status": "active",
+      "season": "summer",
+      "credit": "Whitney Brook Matson",
+      "license": "CC-BY",
+      "licenseUrl": "https://creativecommons.org/licenses/by/4.0/",
+      "sourceUrl": "https://www.inaturalist.org/observations/294985640",
+      "idVerification": "inat-research",
+      "capturedAt": "2025-07-03",
+      "elevationFt": null,
+      "site": {},
+      "derivatives": {
+        "thumb": {
+          "src": "/plants/antennaria-rosea--habit--003/thumb.webp",
+          "width": 400,
+          "height": 533
+        },
+        "card": {
+          "src": "/plants/antennaria-rosea--habit--003/card.webp",
+          "width": 768,
+          "height": 1024
         }
       }
     },
@@ -1220,6 +1307,35 @@
       }
     },
     {
+      "id": "geranium-caespitosum--habit--002",
+      "speciesId": 108,
+      "sci": "Geranium caespitosum",
+      "role": "habit",
+      "tier": 0,
+      "status": "active",
+      "season": "summer",
+      "credit": "Mark Pollock",
+      "license": "CC-BY",
+      "licenseUrl": "https://creativecommons.org/licenses/by/4.0/",
+      "sourceUrl": "https://www.inaturalist.org/observations/224307299",
+      "idVerification": "inat-research",
+      "capturedAt": "2024-06-21",
+      "elevationFt": null,
+      "site": {},
+      "derivatives": {
+        "thumb": {
+          "src": "/plants/geranium-caespitosum--habit--002/thumb.webp",
+          "width": 400,
+          "height": 533
+        },
+        "card": {
+          "src": "/plants/geranium-caespitosum--habit--002/card.webp",
+          "width": 768,
+          "height": 1024
+        }
+      }
+    },
+    {
       "id": "geranium-viscosissimum--habit--001",
       "speciesId": 103,
       "sci": "Geranium viscosissimum",
@@ -1975,6 +2091,35 @@
         "card": {
           "src": "/plants/penstemon-strictus--habit--002/card.webp",
           "width": 768,
+          "height": 1024
+        }
+      }
+    },
+    {
+      "id": "penstemon-virens--habit--002",
+      "speciesId": 114,
+      "sci": "Penstemon virens",
+      "role": "habit",
+      "tier": 0,
+      "status": "active",
+      "season": "summer",
+      "credit": "Dan Horowitz",
+      "license": "CC0",
+      "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "sourceUrl": "https://www.inaturalist.org/observations/38786938",
+      "idVerification": "inat-research",
+      "capturedAt": "2019-06-27",
+      "elevationFt": null,
+      "site": {},
+      "derivatives": {
+        "thumb": {
+          "src": "/plants/penstemon-virens--habit--002/thumb.webp",
+          "width": 400,
+          "height": 845
+        },
+        "card": {
+          "src": "/plants/penstemon-virens--habit--002/card.webp",
+          "width": 485,
           "height": 1024
         }
       }

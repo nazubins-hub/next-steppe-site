@@ -926,6 +926,13 @@
     "layer": "companion",
     "layerSrc": "rule",
     "lifespan": "woody",
+    "look": "A low wide-spreading shrub barely a foot tall, its arching stems covered in small glossy three-lobed leaves that turn amber and red in autumn.",
+    "lookSrc": "drafted",
+    "swatch": {
+      "flower": null,
+      "foliage": "#5d7b4a"
+    },
+    "swatchSrc": "drafted",
     "ignWithheld": false,
     "cultureWithheld": false,
     "slug": "rhus-trilobata-autumn-amber"
@@ -1307,6 +1314,13 @@
     "layer": "structure",
     "layerSrc": "rule",
     "lifespan": "woody",
+    "look": "A twiggy thicket-forming deciduous shrub of small oval blue-green leaves, with tiny pink bells followed by waxy white berries that hang on into winter.",
+    "lookSrc": "drafted",
+    "swatch": {
+      "flower": "#e9b7c4",
+      "foliage": "#7f9a86"
+    },
+    "swatchSrc": "drafted",
     "ignWithheld": false,
     "cultureWithheld": false,
     "slug": "symphoricarpos-oreophilus"
@@ -2158,6 +2172,13 @@
     "layer": "structure",
     "layerSrc": "rule",
     "lifespan": "perennial",
+    "look": "A stiff evergreen rosette of narrow blue-green sword leaves with white curling fibres at their edges, sending up a tall stalk of waxy cream bells.",
+    "lookSrc": "drafted",
+    "swatch": {
+      "flower": "#efe9d6",
+      "foliage": "#8fa392"
+    },
+    "swatchSrc": "drafted",
     "ignWithheld": false,
     "cultureWithheld": false,
     "slug": "yucca-glauca"
@@ -2260,6 +2281,13 @@
     "sociability": 2,
     "sociabilitySrc": "rule",
     "spreadHabit": "clumping",
+    "look": "Tight succulent rosettes of small fleshy pointed leaves that flush red in cold, with short stems of starry yellow flowers.",
+    "lookSrc": "drafted",
+    "swatch": {
+      "flower": "#f2d23a",
+      "foliage": "#8a9a60"
+    },
+    "swatchSrc": "drafted",
     "ignWithheld": false,
     "cultureWithheld": false,
     "slug": "sedum-lanceolatum"
@@ -2716,6 +2744,13 @@
     "layer": "companion",
     "layerSrc": "rule",
     "lifespan": "perennial",
+    "look": "A spreading mat of feathery ferny grey-green leaves with upright stems carrying flat-topped clusters of tiny white flowers.",
+    "lookSrc": "drafted",
+    "swatch": {
+      "flower": "#f4f1e6",
+      "foliage": "#8fa07a"
+    },
+    "swatchSrc": "drafted",
     "ignWithheld": false,
     "cultureWithheld": false,
     "slug": "achillea-millefolium"
@@ -3055,6 +3090,13 @@
     "layer": "companion",
     "layerSrc": "rule",
     "lifespan": "perennial",
+    "look": "An upright bushy plant of smooth blue-green leaves, covered late in the season with clouds of small lavender-blue daisies with yellow centres.",
+    "lookSrc": "drafted",
+    "swatch": {
+      "flower": "#9a9ae0",
+      "foliage": "#7a9a88"
+    },
+    "swatchSrc": "drafted",
     "ignWithheld": false,
     "cultureWithheld": false,
     "slug": "symphyotrichum-laeve"
@@ -3147,6 +3189,13 @@
     "sociability": 4,
     "sociabilitySrc": "rule",
     "spreadHabit": "rhizomatous",
+    "look": "Upright clumps of grey-green three-part leaves with spikes of bright yellow pea flowers standing above them, like a yellow lupine.",
+    "lookSrc": "drafted",
+    "swatch": {
+      "flower": "#f2c418",
+      "foliage": "#8a9a78"
+    },
+    "swatchSrc": "drafted",
     "ignWithheld": false,
     "cultureWithheld": false,
     "slug": "thermopsis-montana"
@@ -3196,6 +3245,13 @@
     "layer": "companion",
     "layerSrc": "rule",
     "lifespan": "perennial",
+    "look": "A bushy mound of lobed blue-green leaves under large clear-yellow flowers with long slender spurs, held well above the foliage.",
+    "lookSrc": "drafted",
+    "swatch": {
+      "flower": "#f5d53a",
+      "foliage": "#86a08a"
+    },
+    "swatchSrc": "drafted",
     "ignWithheld": false,
     "cultureWithheld": false,
     "slug": "aquilegia-chrysantha"
@@ -3244,6 +3300,13 @@
     "layer": "companion",
     "layerSrc": "rule",
     "lifespan": "perennial",
+    "look": "Slender wiry stems from a small basal clump, with nodding blue bell flowers that thread through rockwork and neighbours.",
+    "lookSrc": "drafted",
+    "swatch": {
+      "flower": "#7c8fe0",
+      "foliage": "#6f8f55"
+    },
+    "swatchSrc": "drafted",
     "ignWithheld": false,
     "cultureWithheld": false,
     "slug": "campanula-rotundifolia"
@@ -3292,6 +3355,13 @@
     "layer": "companion",
     "layerSrc": "rule",
     "lifespan": "perennial",
+    "look": "Erect stems from a basal rosette of narrow grey-green leaves, topped by dense rounded heads of fragrant yellow-orange four-petalled flowers.",
+    "lookSrc": "drafted",
+    "swatch": {
+      "flower": "#f0a020",
+      "foliage": "#8a9a70"
+    },
+    "swatchSrc": "drafted",
     "ignWithheld": false,
     "cultureWithheld": false,
     "slug": "erysimum-capitatum"
@@ -3625,6 +3695,13 @@
     "layer": "companion",
     "layerSrc": "rule",
     "lifespan": "perennial",
+    "look": "A low rosette of ferny semi-evergreen leaves that redden in cold, with nodding dusky-pink bells followed by smoky feathered seed plumes.",
+    "lookSrc": "drafted",
+    "swatch": {
+      "flower": "#c8768a",
+      "foliage": "#6f8b52"
+    },
+    "swatchSrc": "drafted",
     "ignWithheld": false,
     "cultureWithheld": false,
     "slug": "geum-triflorum"
@@ -4095,6 +4172,13 @@
     "sociability": 2,
     "sociabilitySrc": "rule",
     "spreadHabit": "clumping",
+    "look": "A dense rounded tussock of very fine, rolled blue-green to grey-green leaves, with slender stems of narrow open flower heads that ripen to straw-tan above the clump.",
+    "lookSrc": "drafted",
+    "swatch": {
+      "flower": null,
+      "foliage": "#8fa38e"
+    },
+    "swatchSrc": "drafted",
     "ignWithheld": false,
     "cultureWithheld": false,
     "slug": "festuca-idahoensis"
@@ -4377,6 +4461,13 @@
     "sociability": 5,
     "sociabilitySrc": "rule",
     "spreadHabit": "stoloniferous",
+    "look": "A silver-grey woolly mat of tiny leaves close to the ground, with short stems topped by fuzzy white flower heads.",
+    "lookSrc": "drafted",
+    "swatch": {
+      "flower": "#f1efe8",
+      "foliage": "#b8bcb0"
+    },
+    "swatchSrc": "drafted",
     "ignWithheld": false,
     "cultureWithheld": true,
     "slug": "antennaria-parvifolia"
@@ -4655,6 +4746,13 @@
     "sociability": 4,
     "sociabilitySrc": "rule",
     "spreadHabit": "mat-forming",
+    "look": "A flat glossy evergreen mat of tiny dark leaves, smothered in spring by small true-blue flowers with pale centres.",
+    "lookSrc": "drafted",
+    "swatch": {
+      "flower": "#3b6fd4",
+      "foliage": "#2f4f34"
+    },
+    "swatchSrc": "drafted",
     "ignWithheld": false,
     "cultureWithheld": false,
     "slug": "veronica-liwanensis"
@@ -4978,6 +5076,8 @@
     "layer": "groundcover",
     "layerSrc": "rule",
     "lifespan": "perennial",
+    "look": "A small delicate plant of a few narrow fleshy leaves, with pale pink dark-veined star flowers close to the ground; it disappears entirely by midsummer.",
+    "lookSrc": "drafted",
     "ignWithheld": false,
     "cultureWithheld": false,
     "slug": "claytonia-lanceolata"
@@ -5023,6 +5123,13 @@
     "sociability": 4,
     "sociabilitySrc": "rule",
     "spreadHabit": "rhizomatous",
+    "look": "Upright slender stems ringed with whorls of narrow leaves, topped by loose frothy panicles of tiny white flowers.",
+    "lookSrc": "drafted",
+    "swatch": {
+      "flower": "#f7f4ea",
+      "foliage": "#7d9161"
+    },
+    "swatchSrc": "drafted",
     "ignWithheld": false,
     "cultureWithheld": false,
     "slug": "galium-boreale"
@@ -5065,6 +5172,13 @@
     "layer": "companion",
     "layerSrc": "rule",
     "lifespan": "perennial",
+    "look": "A low clump of smooth blue-green lance-shaped leaves with clusters of nodding blue bells that open from pink buds, early in spring.",
+    "lookSrc": "drafted",
+    "swatch": {
+      "flower": "#6f93d8",
+      "foliage": "#7f9e94"
+    },
+    "swatchSrc": "drafted",
     "ignWithheld": false,
     "cultureWithheld": false,
     "slug": "mertensia-lanceolata"
@@ -5109,6 +5223,11 @@
     "lifespan": "perennial",
     "look": "A lax, open mound of deeply cut, lobed green leaves, scattered with pink saucer-shaped flowers veined in magenta.",
     "lookSrc": "drafted",
+    "swatch": {
+      "flower": "#e27fb4",
+      "foliage": "#5f8a45"
+    },
+    "swatchSrc": "drafted",
     "ignWithheld": false,
     "cultureWithheld": false,
     "slug": "geranium-caespitosum"
@@ -5155,6 +5274,13 @@
     "sociability": 3,
     "sociabilitySrc": "rule",
     "spreadHabit": "self-sowing",
+    "look": "Clumps of silver-silky palmate leaves under upright spikes of blue-violet pea flowers.",
+    "lookSrc": "drafted",
+    "swatch": {
+      "flower": "#6e62c4",
+      "foliage": "#a9b0a0"
+    },
+    "swatchSrc": "drafted",
     "ignWithheld": false,
     "cultureWithheld": false,
     "slug": "lupinus-argenteus"
@@ -5197,6 +5323,13 @@
     "layer": "companion",
     "layerSrc": "rule",
     "lifespan": "perennial",
+    "look": "A tuft of narrow flat leaves with slender stems bent sharply at the top, carrying nodding umbels of pale-pink to white flowers that dry to papery seed heads.",
+    "lookSrc": "drafted",
+    "swatch": {
+      "flower": "#efc7d8",
+      "foliage": "#7f9468"
+    },
+    "swatchSrc": "drafted",
     "ignWithheld": false,
     "cultureWithheld": false,
     "slug": "allium-cernuum"
@@ -5239,6 +5372,13 @@
     "layer": "companion",
     "layerSrc": "rule",
     "lifespan": "perennial",
+    "look": "A small tuft of narrow grassy leaves with slender stems carrying upright rounded umbels of pink flowers.",
+    "lookSrc": "drafted",
+    "swatch": {
+      "flower": "#e08fb3",
+      "foliage": "#7f9468"
+    },
+    "swatchSrc": "drafted",
     "ignWithheld": false,
     "cultureWithheld": false,
     "slug": "allium-geyeri"
@@ -5285,6 +5425,13 @@
     "sociability": 5,
     "sociabilitySrc": "rule",
     "spreadHabit": "stoloniferous",
+    "look": "A silver-grey felted mat of small spoon-shaped leaves knitting into a low carpet, with short stems of small fuzzy rose-pink flower heads.",
+    "lookSrc": "drafted",
+    "swatch": {
+      "flower": "#e6a6b8",
+      "foliage": "#b4b8ac"
+    },
+    "swatchSrc": "drafted",
     "ignWithheld": false,
     "cultureWithheld": false,
     "slug": "antennaria-rosea"
@@ -5333,6 +5480,11 @@
     "spreadHabit": "self-sowing",
     "look": "A loose mound of rounded, lobed blue-green leaves under nodding flowers with long backswept spurs: sky-blue outer petals around a white cup.",
     "lookSrc": "drafted",
+    "swatch": {
+      "flower": "#8fb0e8",
+      "foliage": "#86a08a"
+    },
+    "swatchSrc": "drafted",
     "ignWithheld": false,
     "cultureWithheld": false,
     "slug": "aquilegia-caerulea"
@@ -5381,6 +5533,11 @@
     "spreadHabit": "clumping",
     "look": "Low clumps of glossy dark-green rosettes, with short upright spikes of small tubular blue-violet flowers.",
     "lookSrc": "drafted",
+    "swatch": {
+      "flower": "#6a5fc8",
+      "foliage": "#3f6a3a"
+    },
+    "swatchSrc": "drafted",
     "ignWithheld": false,
     "cultureWithheld": false,
     "slug": "penstemon-virens"
@@ -5423,6 +5580,8 @@
     "layer": "groundcover",
     "layerSrc": "rule",
     "lifespan": "perennial",
+    "look": "A dense evergreen tussock of fine grassy dark-green leaves, with round pink globe flowers held on slender wiry stems above it.",
+    "lookSrc": "drafted",
     "ignWithheld": false,
     "cultureWithheld": false,
     "slug": "armeria-maritima"
