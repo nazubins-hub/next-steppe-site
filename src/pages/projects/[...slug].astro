@@ -1,0 +1,81 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import { getCollection } from 'astro:content';
+
+export async function getStaticPaths() {
+  const projects = await getCollection('portfolio', ({ data }) => !data.draft);
+  return projects.map((project) => ({
+    params: { slug: project.slug },
+    props: { project },
+  }));
+}
+
+const { project } = Astro.props;
+const { Content } = await project.render();
+const d = project.data;
+---
+<BaseLayout title={`${d.title} — Next Steppe`} description={d.summary}>
+  <article class="wrap project">
+    <a href="/projects" class="back-link">&larr; Projects</a>
+    <span class="meta-row">
+      <span class="tag">Sample project</span>
+      <span>{d.location}</span>
+      {d.elevation && <span>{d.elevation}</span>}
+      {d.year && <span>{d.year}</span>}
+    </span>
+    <h1>{d.title}</h1>
+    <p class="summary">{d.summary}</p>
+
+    {d.image && (
+      <figure class="fig">
+        <img src={d.image} alt={d.imageAlt ?? ''} loading="lazy" />
+        {d.imageCaption && <figcaption>{d.imageCaption}</figcaption>}
+      </figure>
+    )}
+
+    <div class="prose">
+      <Content />
+    </div>
+
+    {d.plan && (
+      <figure class="fig plan">
+        <img src={d.plan} alt={`Planting plan for ${d.location}: every plant placed in the bed, lettered by species.`} loading="lazy" />
+        <figcaption>Planting plan. Each letter is a species, each number a drift; the schedule that goes with it lists every plant and container.</figcaption>
+      </figure>
+    )}
+
+    {d.scope.length > 0 && (
+      <div class="deliverables">
+        <h2>Delivered</h2>
+        <ul>{d.scope.map((s) => <li>{s}</li>)}</ul>
+      </div>
+    )}
+
+    <div class="cta">
+      <a href="/contact" class="btn primary">Start a project</a>
+      <a href="/community" class="btn">Community design offer</a>
+    </div>
+  </article>
+</BaseLayout>
+
+<style>
+  .project { padding-top: 2.5rem; padding-bottom: 4rem; max-width: 760px; }
+  .back-link {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    text-decoration: none;
+    margin-bottom: 1.5rem;
+    color: var(--basalt-soft);
+  }
+  .back-link:hover { color: var(--sienna); }
+  h1 { margin-top: 0.6rem; }
+  .summary { color: var(--basalt-soft); font-size: 1.1rem; }
+  .fig { margin: 2rem 0; }
+  .fig img { width: 100%; height: auto; display: block; border: 1px solid var(--line); border-radius: var(--radius); }
+  .fig.plan img { background: #F3F5F1; max-height: 760px; object-fit: contain; }
+  .fig figcaption { font-size: 0.82rem; color: var(--basalt-soft); margin-top: 0.6rem; line-height: 1.5; }
+  .prose :global(p) { color: var(--basalt); }
+  .deliverables ul { padding-left: 1.2rem; }
+  .cta { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 2.5rem; }
+</style>

@@ -1,0 +1,55 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import { getCollection } from 'astro:content';
+
+const projects = await getCollection('portfolio', ({ data }) => !data.draft);
+---
+<BaseLayout title="Projects — Next Steppe" description="Sample planting designs in the Vail Valley: site analysis, planting plans and schedules, carried through on real lots.">
+  <section class="wrap projects">
+    <span class="eyebrow">Sample Projects</span>
+    <h1>Projects</h1>
+    <p class="intro">
+      Next Steppe is a new practice. These are sample designs done on friends&rsquo; properties
+      to run the whole process &mdash; site reading, water, planting, placement &mdash; through real
+      lots before taking on clients. Built work will join them as it goes in.
+    </p>
+
+    <div class="grid-2 project-grid">
+      {projects.map((p) => (
+        <a class="card project-card" href={`/projects/${p.slug}`}>
+          <span class="tag sample">Sample project</span>
+          <p class="project-loc">{p.data.location}{p.data.elevation && <> &middot; {p.data.elevation}</>}</p>
+          <h2>{p.data.title}</h2>
+          <p>{p.data.summary}</p>
+          <span class="read-more">View &rarr;</span>
+        </a>
+      ))}
+    </div>
+
+    <div class="stamp next">
+      <span class="compass">&#8593;N</span>
+      Taking on one free community design this winter &mdash; <a href="/community">see the offer</a>
+    </div>
+  </section>
+</BaseLayout>
+
+<style>
+  .projects { padding-top: 3rem; padding-bottom: 4rem; }
+  .intro { max-width: 640px; color: var(--basalt-soft); font-size: 1.05rem; }
+  .project-grid { margin-top: 2.5rem; }
+  .project-card { text-decoration: none; color: var(--basalt); display: flex; flex-direction: column; gap: 0.4rem; }
+  .project-card:hover { border-color: var(--sienna); }
+  .project-card h2 { font-size: 1.35rem; margin: 0.2em 0; }
+  .project-card p { margin: 0; color: var(--basalt-soft); }
+  .project-loc {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--sienna) !important;
+  }
+  .sample { align-self: flex-start; }
+  .read-more { font-family: var(--font-mono); font-size: 0.8rem; margin-top: auto; padding-top: 0.6rem; }
+  .next { margin-top: 3rem; }
+  .next a { color: inherit; }
+</style>

@@ -1,0 +1,78 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Contour from '../components/Contour.astro';
+---
+<BaseLayout title="Community Design — Next Steppe" description="One free landscape design this winter for a school, library, church, community garden or public site in the Vail Valley.">
+  <section class="wrap community">
+    <span class="eyebrow">Winter 2026&ndash;27</span>
+    <h1>One free design for a community site.</h1>
+    <p class="lead">
+      Next Steppe will design one public or nonprofit landscape in the Vail Valley this
+      winter at no charge: a school yard, a library or church frontage, a community garden,
+      a town or district parcel. Designed by spring, ready for you to build in summer 2027.
+    </p>
+    <p class="why">
+      Why free: Next Steppe is a new practice, and a real public project, built and
+      photographed a season later, is worth more to it this year than a fee.
+    </p>
+
+    <div class="grid-2 offer-grid">
+      <div>
+        <h2>What you get</h2>
+        <ul class="offer-list">
+          <li><span class="tag">01</span> A site reading: terrain, sun and shade from lidar, soils, flood and wildfire mapping, deer and elk range.</li>
+          <li><span class="tag">02</span> A water plan: where snowmelt and storm runoff go now, and where they should go.</li>
+          <li><span class="tag">03</span> A planting plan and schedule, with xeric and Intermountain West native species placed and counted.</li>
+          <li><span class="tag">04</span> A concept rendering over a photo of the site, with your consent, labelled as AI-generated.</li>
+          <li><span class="tag">05</span> A cost range to budget and fundraise against.</li>
+          <li><span class="tag">06</span> A maintenance plan sized to whoever will look after it: volunteers, custodial staff or a contractor.</li>
+        </ul>
+      </div>
+      <div>
+        <h2>What it takes from you</h2>
+        <ul class="offer-list">
+          <li><span class="tag">&mdash;</span> Access to the site, and one person who can make decisions.</li>
+          <li><span class="tag">&mdash;</span> Permission to photograph the site before and after and to publish the project here.</li>
+        </ul>
+        <h2 class="not">What it doesn&rsquo;t cover</h2>
+        <p>
+          The build itself. Installation, labour and materials are yours to fund. Next Steppe
+          will help you find the money and the hands: grant leads, the Beyond Lawn program
+          where a site qualifies, and volunteer planting days.
+        </p>
+      </div>
+    </div>
+
+    <Contour />
+
+    <h2>Timeline</h2>
+    <dl class="timeline">
+      <div><dt>Dec&ndash;Jan</dt><dd>Site reading from data, one site visit, intake</dd></div>
+      <div><dt>Feb&ndash;Mar</dt><dd>Water plan, planting plan, rendering; one review together</dd></div>
+      <div><dt>Apr&ndash;May</dt><dd>Final sheets; you raise install funds and approvals</dd></div>
+      <div><dt>Jun&ndash;Jul</dt><dd>Build</dd></div>
+    </dl>
+
+    <div class="cta">
+      <a href="/contact?type=community" class="btn primary">Suggest a site</a>
+      <a href="/projects" class="btn">See sample projects</a>
+    </div>
+    <p class="fine">Know a site that would suit this but isn&rsquo;t yours to offer? Suggestions are welcome too.</p>
+  </section>
+</BaseLayout>
+
+<style>
+  .community { padding-top: 3rem; padding-bottom: 4rem; }
+  .lead { max-width: 660px; font-size: 1.1rem; color: var(--basalt-soft); }
+  .why { max-width: 660px; color: var(--basalt); }
+  .offer-grid { margin-top: 2rem; align-items: start; }
+  .offer-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.8rem; }
+  .offer-list li { display: flex; align-items: baseline; gap: 0.7rem; }
+  .not { margin-top: 2rem; }
+  .timeline { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 1rem; margin: 1rem 0 0; }
+  .timeline div { border-top: 2px solid var(--juniper); padding-top: 0.6rem; }
+  .timeline dt { font-family: var(--font-mono); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--sienna); }
+  .timeline dd { margin: 0.3rem 0 0; }
+  .cta { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 2.5rem; }
+  .fine { font-size: 0.9rem; color: var(--basalt-soft); }
+</style>

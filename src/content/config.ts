@@ -21,6 +21,10 @@ const portfolio = defineCollection({
     scope: z.array(z.string()).default([]),
     waterUse: z.string().optional(),
     year: z.string().optional(),
+    image: z.string().optional(),
+    imageAlt: z.string().optional(),
+    imageCaption: z.string().optional(),
+    plan: z.string().optional(),
     draft: z.boolean().default(false),
   }),
 });

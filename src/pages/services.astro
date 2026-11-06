@@ -1,0 +1,89 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Contour from '../components/Contour.astro';
+---
+<BaseLayout title="Services — Next Steppe" description="Site analysis, planting design and design-build for xeric and native landscapes in the Vail Valley.">
+  <section class="wrap services">
+    <span class="eyebrow">Services</span>
+    <h1>What a project includes</h1>
+    <p class="lead">
+      Every project starts from the same reading of the site: where water arrives and
+      leaves, how much sun each bed actually gets under the trees and the ridge, and what
+      the elevation and fire rules allow within reach of the house. What comes after
+      depends on how far you want to take it.
+    </p>
+
+    <div class="svc-list">
+      <div class="svc card">
+        <span class="tag">01</span>
+        <h2>Site analysis</h2>
+        <p>
+          Elevation, slope and aspect from USGS terrain data; hours of direct sun per bed from
+          lidar, with the trees and buildings in it; soils, flood mapping and wildlife range.
+          Delivered as a site analysis sheet with a palette of species that suit each zone.
+        </p>
+        <p class="fit">Useful before you hire anyone, or before you plant anything yourself.</p>
+      </div>
+
+      <div class="svc card">
+        <span class="tag">02</span>
+        <h2>Planting design</h2>
+        <p>
+          The site analysis, plus a water plan, a planting plan with every plant placed, a
+          planting schedule with counts and container sizes, a maintenance plan, and a concept
+          rendering over a photo of your site on request. Ready to hand to an installer or to
+          plant yourself.
+        </p>
+        <p class="fit">Pairs with Eagle County&rsquo;s Beyond Lawn turf-replacement program.</p>
+      </div>
+
+      <div class="svc card">
+        <span class="tag">03</span>
+        <h2>Design + install</h2>
+        <p>
+          The design, carried through: soil preparation, planting and mulch, sequenced so the
+          beds go in during the short window the valley gives you. Scoped from the plan, with a
+          written quote before any work starts.
+        </p>
+        <p class="fit">For beds and borders, HOA common areas and small public sites.</p>
+      </div>
+    </div>
+
+    <p class="pricing">
+      Fees are set per project once the site has been seen. Cost ranges in a design are for
+      budgeting, never a bid.
+    </p>
+
+    <div class="cta">
+      <a href="/contact" class="btn primary">Start a project</a>
+      <a href="/plants" class="btn">Read your own site in the plant browser</a>
+    </div>
+  </section>
+
+  <Contour />
+
+  <section class="wrap community-band">
+    <span class="eyebrow">This Winter</span>
+    <h2>One free design for a community site</h2>
+    <p>
+      A school, library, church, community garden or town parcel in the Vail Valley.
+      Designed over the winter, ready to build next summer.
+    </p>
+    <a href="/community" class="btn">See the offer</a>
+  </section>
+</BaseLayout>
+
+<style>
+  .services { padding-top: 3rem; padding-bottom: 3rem; }
+  .lead { max-width: 660px; font-size: 1.1rem; color: var(--basalt-soft); }
+  .svc-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.4rem; margin-top: 2.5rem; }
+  .svc { display: flex; flex-direction: column; gap: 0.4rem; }
+  .svc h2 { font-size: 1.35rem; margin: 0.3em 0 0.1em; }
+  .svc p { margin: 0; color: var(--basalt); }
+  .svc .tag { align-self: flex-start; }
+  .fit { color: var(--basalt-soft) !important; font-size: 0.9rem; margin-top: auto !important; padding-top: 0.8rem; }
+  .pricing { margin-top: 2rem; color: var(--basalt-soft); max-width: 640px; }
+  .cta { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 1.5rem; }
+  .community-band { padding-top: 1rem; padding-bottom: 4rem; }
+  .community-band p { max-width: 600px; color: var(--basalt-soft); }
+</style>

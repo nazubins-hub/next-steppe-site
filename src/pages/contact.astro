@@ -38,6 +38,14 @@ import BaseLayout from '../layouts/BaseLayout.astro';
             <input type="email" name="email" required />
           </label>
           <label>
+            Project type
+            <select name="project_type" id="project-type">
+              <option value="community">Community site (free design offer)</option>
+              <option value="beyond-lawn">Replacing lawn (Beyond Lawn)</option>
+              <option value="other" selected>Something else</option>
+            </select>
+          </label>
+          <label>
             Location / property
             <input type="text" name="location" placeholder="e.g. Avon, Edwards, Eagle-Vail" />
           </label>
@@ -91,6 +99,13 @@ import BaseLayout from '../layouts/BaseLayout.astro';
 <script>
   const form = document.getElementById('contact-form') as HTMLFormElement | null;
   const status = document.getElementById('form-status');
+
+  // /community links here as ?type=community so the enquiry arrives pre-sorted.
+  const typeParam = new URLSearchParams(location.search).get('type');
+  const typeSelect = document.getElementById('project-type') as HTMLSelectElement | null;
+  if (typeSelect && typeParam && [...typeSelect.options].some((o) => o.value === typeParam)) {
+    typeSelect.value = typeParam;
+  }
 
   if (form && status) {
     const button = form.querySelector('button[type="submit"]') as HTMLButtonElement;
@@ -181,6 +196,7 @@ import BaseLayout from '../layouts/BaseLayout.astro';
     color: var(--basalt-soft);
   }
   .contact-form input,
+  .contact-form select,
   .contact-form textarea {
     font-family: var(--font-body);
     font-size: 1rem;

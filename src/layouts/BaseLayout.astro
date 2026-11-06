@@ -50,6 +50,8 @@ const canonical = new URL(Astro.url.pathname, Astro.site).href;
         <span class="wordmark-sub">Xeriscape Design &amp; Planning</span>
       </a>
       <nav class="site-nav">
+        <a href="/services">Services</a>
+        <a href="/projects">Projects</a>
         <a href="/plants">Plants</a>
         <a href="/blog">Journal</a>
         <a href="/about">About</a>
@@ -68,6 +70,9 @@ const canonical = new URL(Astro.url.pathname, Astro.site).href;
         <span class="compass">&#8593;N</span>VAIL VALLEY, CO &middot; 39.6403&deg; N, 106.5455&deg; W &middot; ZONE 5B
       </div>
       <div class="footer-links">
+        <a href="/services">Services</a>
+        <a href="/projects">Projects</a>
+        <a href="/community">Community design</a>
         <a href="/plants">Plants</a>
         <a href="/blog">Journal</a>
         <a href="/about">About</a>
@@ -128,7 +133,9 @@ const canonical = new URL(Astro.url.pathname, Astro.site).href;
     color: var(--basalt);
   }
   .site-nav a:hover { color: var(--sienna); }
-  .nav-cta { padding: 0.55rem 1.1rem; }
+  /* `.site-nav a` sets the link colour and outranks `.btn.primary`, which left
+     the CTA as dark text on a dark button. */
+  .site-nav a.nav-cta { padding: 0.55rem 1.1rem; color: var(--sand-light); }
   .nav-cta:hover { color: var(--sand-light) !important; }
 
   .site-footer {
@@ -143,7 +150,8 @@ const canonical = new URL(Astro.url.pathname, Astro.site).href;
   }
   .footer-links {
     display: flex;
-    gap: 1.4rem;
+    flex-wrap: wrap;
+    gap: 0.6rem 1.4rem;
     font-family: var(--font-mono);
     font-size: 0.8rem;
   }
@@ -157,6 +165,8 @@ const canonical = new URL(Astro.url.pathname, Astro.site).href;
   }
 
   @media (max-width: 640px) {
-    .site-nav { font-size: 0.78rem; gap: 1rem; }
+    /* Five links and the CTA do not fit one row at phone width; wrap rather
+       than push the page sideways. */
+    .site-nav { font-size: 0.78rem; gap: 0.6rem 1rem; flex-wrap: wrap; }
   }
 </style>
